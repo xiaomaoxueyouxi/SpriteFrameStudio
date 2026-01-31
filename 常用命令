@@ -1,0 +1,42 @@
+# 查看当前环境
+conda env list
+
+# 清除conda 缓存
+conda clean --all
+
+# 切换到项目目录
+# 例如： cd /path/to/project
+
+# 删除旧环境(如果存在)
+conda env remove --name spriteframe -y
+
+# 在线还原环境
+conda env create -f environment_gpu.yml
+
+# 激活并验证
+conda activate spriteframe_gpu
+
+
+# 卸载两个都卸载
+pip uninstall onnxruntime onnxruntime-gpu -y
+
+# 只装 GPU 版本
+pip install onnxruntime-gpu==1.19.2
+
+# 验证 GPU 支持
+python -c "import onnxruntime as ort; print('GPU Providers:', ort.get_available_providers())"
+
+# 启动项目
+python src/main.py
+
+
+
+
+# 打包
+conda info -e
+
+# 用 conda 重新安装
+conda install numpy=1.26.4
+# 导出环境
+conda pack -n spriteframe_gpu -o spriteframe.tar.gz
+conda pack -n spriteframe_gpu -o spriteframe.zip --zip-symlinks
