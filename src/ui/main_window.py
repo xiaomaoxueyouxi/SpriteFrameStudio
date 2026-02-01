@@ -149,7 +149,7 @@ class MainWindow(QMainWindow):
         tab_bar_layout.setSpacing(0)
         
         # 创建垂直Tab按钮
-        tab_names = ["准备视频", "动作分析", "批量缩放", "背景处理", "边缘优化", "描边", "空白裁剪", "导出"]
+        tab_names = ["准备视频", "动作分析", "批量缩放", "背景处理", "边缘优化", "描边", "空白裁剪", "图像增强", "导出"]
         
         # 创建按钮组实现互斥选择
         self.tab_button_group = QButtonGroup()
@@ -241,9 +241,13 @@ class MainWindow(QMainWindow):
         page6 = self._create_crop_page()
         self.page_stack.addWidget(page6)
         
-        # 页面7: 导出
-        page7 = self._create_export_page()
+        # 页面7: 图像增强
+        page7 = self._create_enhance_page()
         self.page_stack.addWidget(page7)
+        
+        # 页面8: 导出
+        page8 = self._create_export_page()
+        self.page_stack.addWidget(page8)
     
     def _create_video_page(self) -> QWidget:
         """创建准备视频页面"""
@@ -766,6 +770,79 @@ class MainWindow(QMainWindow):
         
         return page
     
+    def _create_enhance_page(self) -> QWidget:
+        """创建图像增强页面"""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(15)
+        
+        group = QGroupBox("图像增强 (Real-ESRGAN)")
+        group_layout = QVBoxLayout(group)
+        
+        # 初始化 RealESRGANProcessor
+        from src.core.realesrgan_processor import RealESRGANProcessor
+        self.realesrgan_processor = RealESRGANProcessor()
+        
+        # 检查 Real-ESRGAN 是否可用
+        if not self.realesrgan_processor.is_available():
+            info_label = QLabel("⚠️ Real-ESRGAN 不可用\n请检查 models/realesrgan 目录中的文件是否完整")
+            info_label.setStyleSheet("color: #ff6600; font-weight: bold;")
+            info_label.setWordWrap(True)
+            group_layout.addWidget(info_label)
+        else:
+            # 模型选择
+            model_row = QHBoxLayout()
+            model_row.addWidget(QLabel("模型:"))
+            self.enhance_model_combo = QComboBox()
+            
+            # 加载可用模型
+            models = self.realesrgan_processor.get_available_models()
+            for model in models:
+                if model["installed"]:
+                    self.enhance_model_combo.addItem(
+                        f"{model['display_name']} (x{model['scale']})",
+                        model["name"]
+                    )
+            
+            model_row.addWidget(self.enhance_model_combo)
+            group_layout.addLayout(model_row)
+            
+            # 分块大小
+            tile_row = QHBoxLayout()
+            tile_row.addWidget(QLabel("分块大小:"))
+            self.enhance_tile_spin = QSpinBox()
+            self.enhance_tile_spin.setRange(0, 1024)
+            self.enhance_tile_spin.setValue(0)
+            self.enhance_tile_spin.setSuffix(" px")
+            self.enhance_tile_spin.setToolTip("分块处理大小，0表示不使用分块\n对于大图像建议设置为256-512")
+            tile_row.addWidget(self.enhance_tile_spin)
+            tile_row.addStretch()
+            group_layout.addLayout(tile_row)
+            
+            # 处理按钮
+            self.enhance_btn = QPushButton("✨ 增强选中帧")
+            self.enhance_btn.setEnabled(False)
+            self.enhance_btn.clicked.connect(self._enhance_frames)
+            
+            # 居中对齐
+            enhance_btn_layout = QHBoxLayout()
+            enhance_btn_layout.addStretch()
+            enhance_btn_layout.addWidget(self.enhance_btn)
+            enhance_btn_layout.addStretch()
+            group_layout.addLayout(enhance_btn_layout)
+            
+            # 提示信息
+            hint_label = QLabel("💡 提示：\n• 增强处理可能需要较长时间\n• 建议先处理少量帧测试效果\n• 大分辨率图像建议启用分块处理")
+            hint_label.setStyleSheet("color: #666666;")
+            hint_label.setWordWrap(True)
+            group_layout.addWidget(hint_label)
+        
+        layout.addWidget(group)
+        layout.addStretch()
+        
+        return page
+    
     def _create_export_page(self) -> QWidget:
         """创建导出页面"""
         page = QWidget()
@@ -948,6 +1025,7 @@ class MainWindow(QMainWindow):
             self.pose_btn.setEnabled(False)
             self.add_outline_btn.setEnabled(False)
             self.crop_btn.setEnabled(False)
+            self.enhance_btn.setEnabled(False)
             self.export_btn.setEnabled(False)
             
             # 重置描边参数（通用描边）
@@ -1318,6 +1396,100 @@ class MainWindow(QMainWindow):
                 f"描边宽度: {thickness} 像素\n"
                 f"描边颜色: RGB{color}"
             )
+    
+    def _enhance_frames(self):
+        """批量增强选中帧"""
+        selected_indices = self.frame_preview.get_selected_indices()
+        
+        if not selected_indices:
+            QMessageBox.information(self, "提示", "请先选择要增强的帧")
+            return
+        
+        # 检查 Real-ESRGAN 是否可用
+        if not self.realesrgan_processor.is_available():
+            QMessageBox.warning(self, "错误", "Real-ESRGAN 不可用，请检查文件是否完整")
+            return
+        
+        # 获取增强参数
+        model_name = self.enhance_model_combo.currentData()
+        tile = self.enhance_tile_spin.value()
+        
+        if not model_name:
+            QMessageBox.information(self, "提示", "请选择一个有效的模型")
+            return
+        
+        # 获取选中帧的图像
+        frames = []
+        for idx in selected_indices:
+            frame = self._frame_manager.get_frame(idx)
+            if frame and frame.display_image is not None:
+                frames.append((idx, frame.display_image))
+        
+        if not frames:
+            QMessageBox.information(self, "提示", "所选帧没有可用的图像数据")
+            return
+        
+        # 创建工作线程
+        from src.workers.enhance_worker import EnhanceWorker
+        self.enhance_worker = EnhanceWorker(
+            frames=frames,
+            model_name=model_name,
+            tile=tile
+        )
+        
+        # 连接信号
+        self.enhance_worker.progress.connect(self._on_enhance_progress)
+        self.enhance_worker.frame_processed.connect(self._on_enhance_frame_processed)
+        self.enhance_worker.status_changed.connect(self.status_label.setText)
+        self.enhance_worker.finished.connect(self._on_enhance_finished)
+        self.enhance_worker.error.connect(self._on_enhance_error)
+        
+        # 开始处理
+        self.status_label.setText("正在初始化Real-ESRGAN...")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+        self.enhance_btn.setEnabled(False)
+        QApplication.processEvents()
+        
+        self.enhance_worker.start()
+    
+    def _on_enhance_progress(self, current: int, total: int, percent: float):
+        """增强进度更新"""
+        self.progress_bar.setValue(int(percent))
+        # 只在没有其他状态消息时更新状态栏
+        # 详细的处理信息会通过 status_changed 信号更新
+        QApplication.processEvents()
+    
+    def _on_enhance_frame_processed(self, frame_index: int, enhanced_image: np.ndarray):
+        """单帧增强完成"""
+        # 更新帧数据
+        self._frame_manager.update_frame_image(frame_index, enhanced_image, processed=True)
+        self.frame_preview.update_frame(frame_index, enhanced_image)
+        QApplication.processEvents()
+    
+    def _on_enhance_finished(self):
+        """增强完成"""
+        # 更新动画预览
+        self._update_animation_preview()
+        
+        self.progress_bar.setVisible(False)
+        self.enhance_btn.setEnabled(True)
+        
+        selected_count = len(self.frame_preview.get_selected_indices())
+        self.status_label.setText(f"增强完成：{selected_count} 帧")
+        
+        QMessageBox.information(
+            self, "增强完成",
+            f"已成功增强 {selected_count} 帧"
+        )
+    
+    def _on_enhance_error(self, error_msg: str):
+        """增强错误"""
+        self.progress_bar.setVisible(False)
+        self.enhance_btn.setEnabled(True)
+        self.status_label.setText("增强失败")
+        
+        QMessageBox.warning(self, "错误", f"增强过程中发生错误：\n{error_msg}")
     
     def _optimize_edges(self):
         """批量优化边缘（收缩）"""
@@ -2222,6 +2394,17 @@ class MainWindow(QMainWindow):
         
         # 自动更新动画预览
         self._update_animation_preview()
+        
+        # 更新按钮状态
+        has_selection = len(selected_indices) > 0
+        self.test_bg_btn.setEnabled(has_selection)
+        self.remove_bg_btn.setEnabled(has_selection)
+        self.edge_optimize_btn.setEnabled(has_selection)
+        self.pose_btn.setEnabled(has_selection)
+        self.add_outline_btn.setEnabled(has_selection)
+        self.crop_btn.setEnabled(has_selection)
+        self.enhance_btn.setEnabled(has_selection)
+        self.export_btn.setEnabled(has_selection)
     
     def _on_tab_changed(self, index: int):
         """切换Tab时同步状态"""
