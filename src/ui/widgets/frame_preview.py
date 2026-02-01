@@ -15,6 +15,8 @@ from src.utils.image_utils import numpy_to_qpixmap, composite_on_checkerboard
 class FrameZoomDialog(QDialog):
     """帧放大预览对话框"""
     
+    export_requested = Signal(int)  # frame_index
+    
     def __init__(self, image: np.ndarray, frame_index: int, parent=None):
         super().__init__(parent)
         self.image = image
@@ -47,10 +49,20 @@ class FrameZoomDialog(QDialog):
         info_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(info_label)
         
+        # 按钮区域
+        btn_layout = QHBoxLayout()
+        
+        # 导出按钮
+        export_btn = QPushButton("导出单帧")
+        export_btn.clicked.connect(self._on_export_clicked)
+        btn_layout.addWidget(export_btn)
+        
         # 关闭按钮
         close_btn = QPushButton("关闭")
         close_btn.clicked.connect(self.accept)
-        layout.addWidget(close_btn)
+        btn_layout.addWidget(close_btn)
+        
+        layout.addLayout(btn_layout)
         
         self._display_image()
     
@@ -76,6 +88,11 @@ class FrameZoomDialog(QDialog):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._display_image()
+    
+    def _on_export_clicked(self):
+        """导出按钮点击事件"""
+        self.export_requested.emit(self.frame_index)
+        self.accept()
 
 
 class FrameThumbnail(QFrame):
@@ -201,6 +218,7 @@ class FramePreview(QWidget):
     frame_clicked = Signal(int)  # frame_index
     selection_changed = Signal(list)  # List[int] selected indices
     status_message = Signal(str)  # 状态消息
+    export_single_frame = Signal(int)  # frame_index
     
     def __init__(self, thumbnail_size: int = 120, columns: int = 4, parent=None):
         super().__init__(parent)
@@ -267,7 +285,7 @@ class FramePreview(QWidget):
         toolbar.addWidget(self.selection_info)
         
         # 提示
-        tip_label = QLabel("(双击帧可放大)")
+        tip_label = QLabel("(双击帧可放大，预览中可导出单帧)")
         tip_label.setStyleSheet("color: #666; font-size: 11px;")
         toolbar.addWidget(tip_label)
         
@@ -405,6 +423,8 @@ class FramePreview(QWidget):
                 image = thumb.get_image()
                 if image is not None:
                     dialog = FrameZoomDialog(image, frame_index, parent=self)
+                    # 连接导出信号
+                    dialog.export_requested.connect(self.export_single_frame)
                     dialog.exec()
                 break
     

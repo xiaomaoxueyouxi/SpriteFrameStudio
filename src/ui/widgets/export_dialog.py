@@ -43,6 +43,10 @@ class ExportDialog(QDialog):
         gif_tab = self._create_gif_tab()
         self.tab_widget.addTab(gif_tab, "GIF动画")
         
+        # 单独帧选项卡
+        frames_tab = self._create_frames_tab()
+        self.tab_widget.addTab(frames_tab, "单独帧")
+        
         # Godot选项卡 - 暂时隐藏，功能不成熟
         # godot_tab = self._create_godot_tab()
         # self.tab_widget.addTab(godot_tab, "Godot")
@@ -298,6 +302,75 @@ class ExportDialog(QDialog):
         layout.addStretch()
         return widget
     
+    def _create_frames_tab(self) -> QWidget:
+        """创建单独帧选项卡"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # 尺寸设置
+        size_group = QGroupBox("尺寸")
+        size_layout = QVBoxLayout(size_group)
+        
+        self.frames_original_size_check = QCheckBox("使用当前尺寸")
+        self.frames_original_size_check.setChecked(True)
+        self.frames_original_size_check.stateChanged.connect(self._on_frames_original_size_changed)
+        size_layout.addWidget(self.frames_original_size_check)
+        
+        frames_size_input_layout = QHBoxLayout()
+        frames_size_input_layout.addWidget(QLabel("宽:"))
+        self.frames_width_spin = QSpinBox()
+        self.frames_width_spin.setRange(1, 4096)
+        self.frames_width_spin.setValue(128)
+        self.frames_width_spin.setEnabled(False)
+        self.frames_width_spin.valueChanged.connect(self._on_frames_width_changed)
+        frames_size_input_layout.addWidget(self.frames_width_spin)
+        
+        frames_size_input_layout.addWidget(QLabel("高:"))
+        self.frames_height_spin = QSpinBox()
+        self.frames_height_spin.setRange(1, 4096)
+        self.frames_height_spin.setValue(128)
+        self.frames_height_spin.setEnabled(False)
+        self.frames_height_spin.valueChanged.connect(self._on_frames_height_changed)
+        frames_size_input_layout.addWidget(self.frames_height_spin)
+        
+        self.frames_lock_ratio_check = QCheckBox("🔒 锁定比例")
+        self.frames_lock_ratio_check.setChecked(True)
+        frames_size_input_layout.addWidget(self.frames_lock_ratio_check)
+        
+        size_layout.addLayout(frames_size_input_layout)
+        layout.addWidget(size_group)
+        
+        # 缩放算法选择
+        frames_resample_group = QGroupBox("缩放算法")
+        frames_resample_layout = QHBoxLayout(frames_resample_group)
+        
+        frames_resample_layout.addWidget(QLabel("算法:"))
+        self.frames_resample_combo = QComboBox()
+        self.frames_resample_combo.addItem("📍 最近邻 (像素风格)", ResampleFilter.NEAREST.value)
+        self.frames_resample_combo.addItem("📊 盒式滤波", ResampleFilter.BOX.value)
+        self.frames_resample_combo.addItem("🌀 双线性 (平滑)", ResampleFilter.BILINEAR.value)
+        self.frames_resample_combo.addItem("🔊 Hamming", ResampleFilter.HAMMING.value)
+        self.frames_resample_combo.addItem("✨ 双三次 (高质量)", ResampleFilter.BICUBIC.value)
+        self.frames_resample_combo.addItem("🌟 Lanczos (最高质量)", ResampleFilter.LANCZOS.value)
+        self.frames_resample_combo.setCurrentIndex(5)  # 默认Lanczos
+        frames_resample_layout.addWidget(self.frames_resample_combo, 1)
+        
+        layout.addWidget(frames_resample_group)
+        
+        # 提示
+        hint_label = QLabel(
+            "📁 导出说明：\n"
+            "• 每帧导出为单独的PNG文件\n"
+            "• 文件名格式：{输出名称}_{帧索引}.png\n"
+            "• 适用于需要单独处理每帧的场景"
+        )
+        hint_label.setStyleSheet("color: #888; padding: 10px; background-color: #2a2a2a; border-radius: 4px;")
+        hint_label.setWordWrap(True)
+        layout.addWidget(hint_label)
+        
+        layout.addStretch()
+        return widget
+    
     def _create_godot_tab(self) -> QWidget:
         """创建Godot选项卡"""
         widget = QWidget()
@@ -469,6 +542,30 @@ class ExportDialog(QDialog):
             self.godot_width_spin.setValue(new_width)
             self._updating_size = False
     
+    def _on_frames_original_size_changed(self, state):
+        enabled = state != Qt.Checked
+        self.frames_width_spin.setEnabled(enabled)
+        self.frames_height_spin.setEnabled(enabled)
+        self.frames_lock_ratio_check.setEnabled(enabled)
+    
+    def _on_frames_width_changed(self, value):
+        if self._updating_size or not self.frames_lock_ratio_check.isChecked():
+            return
+        if self._aspect_ratio > 0:
+            self._updating_size = True
+            new_height = int(value / self._aspect_ratio)
+            self.frames_height_spin.setValue(new_height)
+            self._updating_size = False
+    
+    def _on_frames_height_changed(self, value):
+        if self._updating_size or not self.frames_lock_ratio_check.isChecked():
+            return
+        if value > 0:
+            self._updating_size = True
+            new_width = int(value * self._aspect_ratio)
+            self.frames_width_spin.setValue(new_width)
+            self._updating_size = False
+    
     def _browse_path(self):
         # 从上次路径或当前路径开始
         start_dir = self.path_edit.text() or config.last_export_dir or ""
@@ -503,6 +600,17 @@ class ExportDialog(QDialog):
             if gif_file.exists():
                 file_exists = True
                 existing_files.append(gif_file.name)
+        elif self.tab_widget.currentIndex() == 2:  # 单独帧
+            # 检查输出目录是否存在
+            if output_path.exists():
+                # 检查是否有与输出名称相关的文件存在
+                import glob
+                existing_files = glob.glob(str(output_path / f"{output_name}_*.png"))
+                if existing_files:
+                    file_exists = True
+                    existing_files = [Path(f).name for f in existing_files[:3]]  # 只显示前3个文件
+                    if len(existing_files) > 3:
+                        existing_files.append("...")
         
         # 如果文件已存在，询问是否覆盖
         if file_exists:
@@ -530,6 +638,8 @@ class ExportDialog(QDialog):
             self.frame_height_spin.setValue(height)
             self.gif_width_spin.setValue(width)
             self.gif_height_spin.setValue(height)
+            self.frames_width_spin.setValue(width)
+            self.frames_height_spin.setValue(height)
             # Godot选项卡已隐藏，注释掉相关代码
             # self.godot_width_spin.setValue(width)
             # self.godot_height_spin.setValue(height)
@@ -538,12 +648,14 @@ class ExportDialog(QDialog):
         """获取导出配置"""
         config = ExportConfig()
         
-        # 格式（Godot选项卡已隐藏，索引从2变为1）
+        # 格式
         if self.tab_widget.currentIndex() == 0:
             config.format = ExportFormat.SPRITE_SHEET
         elif self.tab_widget.currentIndex() == 1:
             config.format = ExportFormat.GIF
-        # elif self.tab_widget.currentIndex() == 2:
+        elif self.tab_widget.currentIndex() == 2:
+            config.format = ExportFormat.FRAMES
+        # elif self.tab_widget.currentIndex() == 3:
         #     config.format = ExportFormat.GODOT
         
         # 输出路径

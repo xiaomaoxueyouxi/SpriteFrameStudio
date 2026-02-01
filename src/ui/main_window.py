@@ -884,6 +884,7 @@ class MainWindow(QMainWindow):
         self.frame_preview.frame_clicked.connect(self._on_frame_clicked)
         self.frame_preview.selection_changed.connect(self._on_selection_changed)
         self.frame_preview.status_message.connect(self.status_label.setText)
+        self.frame_preview.export_single_frame.connect(self.export_single_frame)
         
         # Tab切换
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
@@ -1183,6 +1184,49 @@ class MainWindow(QMainWindow):
                 QApplication.processEvents()
                 
                 result = self._exporter.export(frames, export_config)
+                
+                self.status_label.setText("导出完成")
+                QMessageBox.information(
+                    self, "导出成功",
+                    f"文件已保存到:\n{result[0]}" + 
+                    (f"\n{result[1]}" if result[1] else "")
+                )
+            except Exception as e:
+                QMessageBox.warning(self, "导出失败", str(e))
+                self.status_label.setText("导出失败")
+    
+    @Slot(int)
+    def export_single_frame(self, frame_index):
+        """导出单个帧"""
+        # 获取要导出的帧
+        frame = self._frame_manager.get_frame(frame_index)
+        if not frame:
+            QMessageBox.warning(self, "错误", f"无法获取帧 #{frame_index}")
+            return
+        
+        # 打开导出对话框
+        dialog = ExportDialog(frame_count=1, parent=self)
+        
+        # 设置当前帧尺寸（用于宽高比计算和默认值）
+        if frame.display_image is not None:
+            h, w = frame.display_image.shape[:2]
+            dialog.set_original_size(w, h)
+        
+        # 修改提示信息，添加帧索引
+        dialog.info_label.setText(f"将导出 1 帧 (#{frame_index})")
+        
+        # 默认切换到单独帧选项卡
+        dialog.tab_widget.setCurrentIndex(2)  # 单独帧选项卡
+        
+        if dialog.exec() == ExportDialog.Accepted:
+            export_config = dialog.get_config()
+            export_config.frame_indices = [frame_index]
+            
+            try:
+                self.status_label.setText("正在导出...")
+                QApplication.processEvents()
+                
+                result = self._exporter.export([frame], export_config)
                 
                 self.status_label.setText("导出完成")
                 QMessageBox.information(
