@@ -273,7 +273,8 @@ class VideoPlayer(QWidget):
 
         if self._range_playback_enabled:
             if self._current_position >= range_end:
-                self._current_position = range_end
+                # 循环播放：重置到区间开始位置
+                self._current_position = self._range_start
                 # 记录帧显示时间
                 start_time = time.time()
                 self._show_frame_at(self._current_position)
@@ -286,7 +287,6 @@ class VideoPlayer(QWidget):
                     self._update_slider()
                 self._update_time_label()
                 self.position_changed.emit(self._current_position)
-                self.pause()
                 return
         else:
             if self._current_position >= self._video_info.duration:
