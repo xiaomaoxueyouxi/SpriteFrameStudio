@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QFrame, QGridLayout, QColorDialog, QSpinBox,
     QStackedWidget, QSizePolicy
 )
-from PySide6.QtCore import Qt, Slot, Signal
+from PySide6.QtCore import Qt, Slot, Signal, QTimer
 from PySide6.QtGui import QAction, QColor, QPainter, QFont
 
 from src.ui.widgets.video_player import VideoPlayer
@@ -110,6 +110,11 @@ class MainWindow(QMainWindow):
         
         self.setup_ui()
         self.setup_connections()
+        
+        # 性能监控定时器
+        self.performance_timer = QTimer(self)
+        self.performance_timer.timeout.connect(self.update_performance_stats)
+        self.performance_timer.start(1000)  # 每秒更新一次
     
     def _apply_flow_btn_style(self, button: QPushButton):
         """为主要操作按钮应用统一样式"""
@@ -837,6 +842,11 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel("就绪")
         statusbar.addWidget(self.status_label)
         
+        # 性能监控标签
+        self.performance_label = QLabel("性能: 就绪")
+        self.performance_label.setStyleSheet("color: #666;")
+        statusbar.addWidget(self.performance_label)
+        
         self.frame_count_label = QLabel("帧数: 0")
         statusbar.addPermanentWidget(self.frame_count_label)
         
@@ -844,6 +854,23 @@ class MainWindow(QMainWindow):
         self.progress_bar.setMaximumWidth(200)
         self.progress_bar.setVisible(False)
         statusbar.addPermanentWidget(self.progress_bar)
+    
+    def update_performance_stats(self):
+        """更新性能统计信息"""
+        if hasattr(self.video_player, 'get_performance_stats'):
+            stats = self.video_player.get_performance_stats()
+            avg_time = stats['average_frame_display_time'] * 1000  # 转换为毫秒
+            hit_rate = stats['cache_hit_rate']
+            
+            self.performance_label.setText(
+                f"性能: 帧显示 {avg_time:.1f}ms, 缓存命中率 {hit_rate:.1f}%"
+            )
+    
+    def reset_performance_stats(self):
+        """重置性能统计信息"""
+        if hasattr(self.video_player, 'reset_performance_stats'):
+            self.video_player.reset_performance_stats()
+            self.performance_label.setText("性能: 就绪")
     
     def setup_connections(self):
         # 时间轴变化

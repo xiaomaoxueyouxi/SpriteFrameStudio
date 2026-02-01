@@ -5,9 +5,10 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
     QPushButton, QSlider, QStyle, QSizePolicy
 )
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import Qt, Signal, QTimer, QThread, QObject
 from PySide6.QtGui import QPixmap
 import numpy as np
+import time
 
 from src.core.video_processor import VideoProcessor
 from src.models.frame_data import VideoInfo
@@ -30,6 +31,10 @@ class VideoPlayer(QWidget):
         self._range_end = 0.0
         self._play_timer = QTimer(self)
         self._play_timer.timeout.connect(self._on_play_tick)
+        self._last_play_time = 0.0
+        self._frame_display_times = []
+        self._cache_hits = 0
+        self._cache_misses = 0
         
         self.setup_ui()
     
@@ -101,6 +106,8 @@ class VideoPlayer(QWidget):
             self._current_position = 0.0
             self._update_time_label()
             self._show_frame_at(0.0)
+            # 开始预加载线程
+            self._processor.start_preload()
             return self._video_info
         except Exception as e:
             print(f"加载视频失败: {e}")
@@ -151,10 +158,23 @@ class VideoPlayer(QWidget):
         if self._range_playback_enabled:
             self._clamp_playback_range()
             self.seek(self._range_start)
+        
+        # 计算预加载范围：从当前位置开始，预加载5秒的帧
+        current_frame = int(self._current_position * self._video_info.fps)
+        preload_duration = 5.0  # 预加载5秒
+        preload_frames = int(preload_duration * self._video_info.fps)
+        end_frame = min(current_frame + preload_frames, self._video_info.frame_count - 1)
+        
+        # 开始预加载
+        self._processor.preload_range(current_frame, end_frame)
+        
         self._is_playing = True
         self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
-        # 30fps更新
-        self._play_timer.start(33)
+        self._last_play_time = time.time()
+        
+        # 根据视频实际帧率设置定时器间隔
+        frame_interval = int(1000 / self._video_info.fps)
+        self._play_timer.start(max(16, frame_interval))  # 最少16ms，约60fps
     
     def pause(self):
         """暂停"""
@@ -176,6 +196,18 @@ class VideoPlayer(QWidget):
     
     def _show_frame_at(self, timestamp: float):
         """显示指定时间的帧"""
+        # 计算帧号，用于缓存命中率统计
+        frame_number = int(timestamp * self._video_info.fps)
+        
+        # 检查缓存是否命中
+        cache_hit = False
+        with self._processor._lock:
+            if frame_number in self._processor._frame_cache:
+                cache_hit = True
+                self._cache_hits += 1
+            else:
+                self._cache_misses += 1
+        
         frame = self._processor.get_frame_at(timestamp)
         if frame is not None:
             pixmap = numpy_to_qpixmap(frame)
@@ -186,10 +218,38 @@ class VideoPlayer(QWidget):
             )
             self.video_label.setPixmap(scaled)
     
+    def get_performance_stats(self):
+        """获取性能统计信息"""
+        if not self._frame_display_times:
+            avg_display_time = 0
+        else:
+            avg_display_time = sum(self._frame_display_times) / len(self._frame_display_times)
+        
+        total_accesses = self._cache_hits + self._cache_misses
+        hit_rate = (self._cache_hits / total_accesses * 100) if total_accesses > 0 else 0
+        
+        return {
+            'average_frame_display_time': avg_display_time,
+            'cache_hit_rate': hit_rate,
+            'cache_hits': self._cache_hits,
+            'cache_misses': self._cache_misses
+        }
+    
+    def reset_performance_stats(self):
+        """重置性能统计信息"""
+        self._frame_display_times.clear()
+        self._cache_hits = 0
+        self._cache_misses = 0
+    
     def _on_play_tick(self):
         """播放定时器回调"""
         if not self._video_info:
             return
+
+        # 计算实际经过的时间，使播放速度更加准确
+        current_time = time.time()
+        elapsed = current_time - self._last_play_time
+        self._last_play_time = current_time
 
         if self._range_playback_enabled:
             self._clamp_playback_range()
@@ -199,13 +259,29 @@ class VideoPlayer(QWidget):
         else:
             range_end = self._video_info.duration
 
-        # 前进一帧的时间
-        self._current_position += 0.033  # ~30fps
+        # 根据实际帧率前进
+        frame_duration = 1.0 / self._video_info.fps
+        self._current_position += frame_duration
+
+        # 持续预加载：每播放1秒，预加载后续5秒的帧
+        current_frame = int(self._current_position * self._video_info.fps)
+        if current_frame % int(self._video_info.fps) == 0:  # 每秒预加载一次
+            preload_duration = 5.0  # 预加载5秒
+            preload_frames = int(preload_duration * self._video_info.fps)
+            end_frame = min(current_frame + preload_frames, self._video_info.frame_count - 1)
+            self._processor.preload_range(current_frame, end_frame)
 
         if self._range_playback_enabled:
             if self._current_position >= range_end:
                 self._current_position = range_end
+                # 记录帧显示时间
+                start_time = time.time()
                 self._show_frame_at(self._current_position)
+                display_time = time.time() - start_time
+                self._frame_display_times.append(display_time)
+                if len(self._frame_display_times) > 100:
+                    self._frame_display_times.pop(0)
+                
                 if not self._slider_dragging:
                     self._update_slider()
                 self._update_time_label()
@@ -216,7 +292,14 @@ class VideoPlayer(QWidget):
             if self._current_position >= self._video_info.duration:
                 self._current_position = 0.0  # 循环
 
+        # 记录帧显示时间
+        start_time = time.time()
         self._show_frame_at(self._current_position)
+        display_time = time.time() - start_time
+        self._frame_display_times.append(display_time)
+        if len(self._frame_display_times) > 100:
+            self._frame_display_times.pop(0)
+
         if not self._slider_dragging:
             self._update_slider()
         self._update_time_label()
@@ -261,4 +344,5 @@ class VideoPlayer(QWidget):
     def release(self):
         """释放资源"""
         self.pause()
+        self._processor.stop_preload()  # 停止预加载线程
         self._processor.release()
