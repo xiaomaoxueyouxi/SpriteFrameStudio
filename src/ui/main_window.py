@@ -108,6 +108,7 @@ class MainWindow(QMainWindow):
         self._video_info: Optional[VideoInfo] = None
         self._scale_aspect_ratio = 1.0  # 缩放宽高比
         self._updating_scale_size = False  # 防止递归更新
+        self._enhance_finished_called = False  # 增强完成标志，防止重复调用
         
         # 垂直Tab按钮列表
         self.tab_buttons = []
@@ -1433,6 +1434,17 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "所选帧没有可用的图像数据")
             return
         
+        # 断开旧的信号连接（如果存在）
+        if hasattr(self, 'enhance_worker') and self.enhance_worker:
+            try:
+                self.enhance_worker.progress.disconnect(self._on_enhance_progress)
+                self.enhance_worker.frame_processed.disconnect(self._on_enhance_frame_processed)
+                self.enhance_worker.status_changed.disconnect(self.status_label.setText)
+                self.enhance_worker.finished.disconnect(self._on_enhance_finished)
+                self.enhance_worker.error.disconnect(self._on_enhance_error)
+            except:
+                pass
+        
         # 创建工作线程
         from src.workers.enhance_worker import EnhanceWorker
         self.enhance_worker = EnhanceWorker(
@@ -1447,6 +1459,9 @@ class MainWindow(QMainWindow):
         self.enhance_worker.status_changed.connect(self.status_label.setText)
         self.enhance_worker.finished.connect(self._on_enhance_finished)
         self.enhance_worker.error.connect(self._on_enhance_error)
+        
+        # 重置增强完成标志
+        self._enhance_finished_called = False
         
         # 开始处理
         self.status_label.setText("正在初始化Real-ESRGAN...")
@@ -1473,6 +1488,13 @@ class MainWindow(QMainWindow):
     
     def _on_enhance_finished(self):
         """增强完成"""
+        # 检查是否已经执行过，防止重复弹出
+        if self._enhance_finished_called:
+            return
+        
+        # 设置执行标志
+        self._enhance_finished_called = True
+        
         # 更新动画预览
         self._update_animation_preview()
         
