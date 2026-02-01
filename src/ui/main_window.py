@@ -41,7 +41,7 @@ class VerticalTabButton(QPushButton):
     def __init__(self, text: str, parent=None):
         super().__init__(text, parent)
         self.setCheckable(True)
-        self.setFixedWidth(50)
+        self.setFixedWidth(60)
         self.setMinimumHeight(100)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         
@@ -60,7 +60,7 @@ class VerticalTabButton(QPushButton):
         
         # 文字（竖排，逐字绘制）
         painter.setPen(QColor("#ffffff") if self.isChecked() else QColor("#aaaaaa"))
-        font = QFont("Microsoft YaHei", 11)
+        font = QFont("Microsoft YaHei", 9)
         painter.setFont(font)
         
         # 逐字竖排显示
@@ -72,7 +72,11 @@ class VerticalTabButton(QPushButton):
         total_height = char_height * len(text)
         
         # 起始Y位置（居中）
-        start_y = (self.height() - total_height) / 2 + char_height
+        # 确保即使在按钮高度有限的情况下也能正确居中
+        ascent = font_metrics.ascent()
+        # 计算垂直居中位置，确保文字不会超出按钮边界
+        available_height = self.height() - 40  # 预留上下边距
+        start_y = max(20, min(self.height() - total_height - 10, (self.height() - total_height) / 2 + ascent))
         
         # 逐字绘制
         x = self.width() / 2
@@ -136,7 +140,7 @@ class MainWindow(QMainWindow):
         # ===== 左侧：垂直Tab栏 =====
         self.vertical_tab_bar = QWidget()
         self.vertical_tab_bar.setObjectName("vertical_tab_bar")
-        self.vertical_tab_bar.setFixedWidth(50)
+        self.vertical_tab_bar.setFixedWidth(60)
         self.vertical_tab_bar.setStyleSheet("""
             QWidget#vertical_tab_bar {
                 background-color: #1e1e1e;
