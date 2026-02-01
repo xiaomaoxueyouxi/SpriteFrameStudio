@@ -280,6 +280,10 @@ class MainWindow(QMainWindow):
         
         self.timeline = FrameTimeline()
         fps_layout.addWidget(self.timeline)
+
+        self.range_play_check = QCheckBox("播放区间")
+        self.range_play_check.setChecked(False)
+        fps_layout.addWidget(self.range_play_check)
         
         self.estimate_label = QLabel("预计: 0 帧")
         fps_layout.addWidget(self.estimate_label)
@@ -844,6 +848,9 @@ class MainWindow(QMainWindow):
     def setup_connections(self):
         # 时间轴变化
         self.timeline.range_changed.connect(self._on_time_range_changed)
+        self.timeline.seek_requested.connect(self.video_player.seek)
+        self.video_player.position_changed.connect(self.timeline.set_current_position)
+        self.range_play_check.toggled.connect(self._on_range_play_toggled)
         self.fps_spin.valueChanged.connect(self._on_fps_changed)
         
         # 帧选择
@@ -895,6 +902,9 @@ class MainWindow(QMainWindow):
             
             # 设置时间轴
             self.timeline.set_duration(self._video_info.duration)
+            self.timeline.set_fps(self._video_info.fps)
+            self.video_player.set_playback_range(*self.timeline.get_range())
+            self.video_player.set_range_playback_enabled(self.range_play_check.isChecked())
             
             # 启用功能
             self.extract_btn.setEnabled(True)
@@ -1414,7 +1424,18 @@ class MainWindow(QMainWindow):
     def _on_time_range_changed(self, start: float, end: float):
         """时间范围变化"""
         self._update_estimate()
-    
+        if self.range_play_check.isChecked():
+            self.video_player.set_playback_range(start, end)
+
+    def _on_range_play_toggled(self, checked: bool):
+        if checked:
+            start, end = self.timeline.get_range()
+            self.video_player.set_playback_range(start, end)
+            self.video_player.set_range_playback_enabled(True)
+        else:
+            self.video_player.set_range_playback_enabled(False)
+            self.video_player.clear_playback_range()
+
     def _on_fps_changed(self, fps: float):
         """FPS变化"""
         config.extract_fps = fps

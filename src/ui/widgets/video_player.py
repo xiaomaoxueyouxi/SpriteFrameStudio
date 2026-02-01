@@ -25,6 +25,9 @@ class VideoPlayer(QWidget):
         self._video_info: Optional[VideoInfo] = None
         self._current_position = 0.0
         self._is_playing = False
+        self._range_playback_enabled = False
+        self._range_start = 0.0
+        self._range_end = 0.0
         self._play_timer = QTimer(self)
         self._play_timer.timeout.connect(self._on_play_tick)
         
@@ -111,6 +114,29 @@ class VideoPlayer(QWidget):
     def current_position(self) -> float:
         return self._current_position
     
+    def set_playback_range(self, start: float, end: float):
+        self._range_start = max(0.0, start)
+        self._range_end = max(self._range_start, end)
+        self._clamp_playback_range()
+
+    def clear_playback_range(self):
+        self._range_start = 0.0
+        self._range_end = 0.0
+
+    def set_range_playback_enabled(self, enabled: bool):
+        self._range_playback_enabled = enabled
+        if enabled:
+            self._clamp_playback_range()
+
+    def _clamp_playback_range(self):
+        if not self._video_info:
+            return
+        duration = self._video_info.duration
+        self._range_start = max(0.0, min(self._range_start, duration))
+        self._range_end = max(0.0, min(self._range_end, duration))
+        if self._range_end < self._range_start:
+            self._range_end = self._range_start
+
     def toggle_play(self):
         """切换播放/暂停"""
         if self._is_playing:
@@ -122,6 +148,9 @@ class VideoPlayer(QWidget):
         """播放"""
         if not self._video_info:
             return
+        if self._range_playback_enabled:
+            self._clamp_playback_range()
+            self.seek(self._range_start)
         self._is_playing = True
         self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
         # 30fps更新
@@ -161,19 +190,38 @@ class VideoPlayer(QWidget):
         """播放定时器回调"""
         if not self._video_info:
             return
-        
+
+        if self._range_playback_enabled:
+            self._clamp_playback_range()
+            if self._current_position < self._range_start:
+                self._current_position = self._range_start
+            range_end = self._range_end
+        else:
+            range_end = self._video_info.duration
+
         # 前进一帧的时间
         self._current_position += 0.033  # ~30fps
-        
-        if self._current_position >= self._video_info.duration:
-            self._current_position = 0.0  # 循环
-        
+
+        if self._range_playback_enabled:
+            if self._current_position >= range_end:
+                self._current_position = range_end
+                self._show_frame_at(self._current_position)
+                if not self._slider_dragging:
+                    self._update_slider()
+                self._update_time_label()
+                self.position_changed.emit(self._current_position)
+                self.pause()
+                return
+        else:
+            if self._current_position >= self._video_info.duration:
+                self._current_position = 0.0  # 循环
+
         self._show_frame_at(self._current_position)
         if not self._slider_dragging:
             self._update_slider()
         self._update_time_label()
         self.position_changed.emit(self._current_position)
-    
+
     def _on_slider_moved(self, value):
         """滑块移动"""
         if not self._video_info:
