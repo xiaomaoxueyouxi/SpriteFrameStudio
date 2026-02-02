@@ -1,7 +1,10 @@
 # SpriteFrameStudio - 精灵帧工作室
 
 作者：小猫学游戏
+
 QQ反馈群：722160123
+
+哔哩哔哩：https://space.bilibili.com/627968233?spm_id_from=333.1007.0.0
 
 ## 项目介绍
 
