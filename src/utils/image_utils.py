@@ -1,5 +1,6 @@
 """图像处理工具"""
 from typing import Optional, Tuple
+from functools import lru_cache
 import numpy as np
 from PIL import Image
 from PySide6.QtGui import QImage, QPixmap
@@ -95,6 +96,7 @@ def create_thumbnail(
     return np.array(pil_image)
 
 
+@lru_cache(maxsize=32)
 def create_checkerboard(
     width: int,
     height: int,
@@ -102,19 +104,18 @@ def create_checkerboard(
     color1: Tuple[int, int, int] = (200, 200, 200),
     color2: Tuple[int, int, int] = (255, 255, 255)
 ) -> np.ndarray:
-    """创建棋盘格背景(用于显示透明图像)"""
+    """创建棋盘格背景(用于显示透明图像) - 带缓存"""
     board = np.zeros((height, width, 3), dtype=np.uint8)
     
-    for y in range(0, height, square_size):
-        for x in range(0, width, square_size):
-            if ((x // square_size) + (y // square_size)) % 2 == 0:
-                color = color1
-            else:
-                color = color2
-            
-            y_end = min(y + square_size, height)
-            x_end = min(x + square_size, width)
-            board[y:y_end, x:x_end] = color
+    # 使用 numpy 向量化操作代替循环，大幅提升性能
+    # 创建坐标网格
+    y_coords, x_coords = np.ogrid[:height, :width]
+    # 计算每个格子是否使用 color1
+    grid_x = x_coords // square_size
+    grid_y = y_coords // square_size
+    use_color1 = ((grid_x + grid_y) % 2 == 0)
+    # 使用广播填充颜色
+    board[:] = np.where(use_color1[:, :, np.newaxis], color1, color2)
     
     return board
 

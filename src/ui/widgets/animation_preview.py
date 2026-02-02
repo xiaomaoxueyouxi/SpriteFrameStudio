@@ -1,17 +1,16 @@
-"""动画预览控件"""
+"""动画预览控件 - 使用透明叠加方案，无需实时合成"""
 from typing import List, Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QSlider, QStyle, QSizePolicy, QComboBox
 )
 from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtGui import QPixmap, QImage
 import numpy as np
-
-from src.utils.image_utils import numpy_to_qpixmap, composite_on_checkerboard
 
 
 class AnimationPreview(QWidget):
-    """动画预览控件"""
+    """动画预览控件 - 使用透明叠加方案，无需实时合成"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -20,8 +19,9 @@ class AnimationPreview(QWidget):
         self._current_index = 0
         self._is_playing = False
         self._fps = 24.0
-        self._bg_mode = "checkerboard"  # 背景模式: checkerboard, white, black, gray, custom
-        self._custom_bg_color = (128, 128, 128)  # 自定义背景色 (RGB)
+        self._bg_mode = "gray"  # 背景模式: checkerboard, white, black, gray, custom
+        self._custom_bg_color = (128, 128, 128)
+        self._cached_pixmaps: List[QPixmap] = []
         
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_tick)
@@ -32,11 +32,11 @@ class AnimationPreview(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         
-        # 图像显示区域
+        # 图像显示区域 - 设置棋盘格背景
         self.image_label = QLabel()
         self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setStyleSheet("background-color: #1a1a1a;")
         self.image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._update_bg_style()
         layout.addWidget(self.image_label)
         
         # 控制栏
@@ -86,15 +86,14 @@ class AnimationPreview(QWidget):
         
         bg_layout.addWidget(QLabel("背景:"))
         self.bg_combo = QComboBox()
-        self.bg_combo.addItem("⚫ 棋盘格", "checkerboard")
+        self.bg_combo.addItem("⚪ 灰色", "gray")
         self.bg_combo.addItem("⚪ 白色", "white")
         self.bg_combo.addItem("⚫ 黑色", "black")
-        self.bg_combo.addItem("● 灰色", "gray")
         self.bg_combo.addItem("⭕ 自定义...", "custom")
         self.bg_combo.currentIndexChanged.connect(self._on_bg_changed)
         bg_layout.addWidget(self.bg_combo)
         
-        # 颜色选择按钮（仅在自定义时显示）
+        # 颜色选择按钮
         self.color_btn = QPushButton()
         self.color_btn.setFixedSize(24, 24)
         self.color_btn.setStyleSheet(
@@ -108,17 +107,28 @@ class AnimationPreview(QWidget):
         bg_layout.addStretch()
         layout.addLayout(bg_layout)
     
+    def _update_bg_style(self):
+        """更新背景样式"""
+        if self._bg_mode == "gray":
+            # 默认灰色背景
+            self.image_label.setStyleSheet("background-color: #808080;")
+        elif self._bg_mode == "white":
+            self.image_label.setStyleSheet("background-color: #ffffff;")
+        elif self._bg_mode == "black":
+            self.image_label.setStyleSheet("background-color: #000000;")
+        elif self._bg_mode == "custom":
+            r, g, b = self._custom_bg_color
+            self.image_label.setStyleSheet(f"background-color: rgb({r}, {g}, {b});")
+    
     def set_frames(self, frames: List[np.ndarray], timestamps: List[float] = None):
-        """设置帧序列
-        
-        Args:
-            frames: 帧图像列表
-            timestamps: 帧时间戳列表（可选）
-        """
+        """设置帧序列"""
         self.stop()
         self._frames = frames
         self._timestamps = timestamps
         self._current_index = 0
+        
+        # 缓存所有帧的 pixmap（保留原始格式，透明自动叠加）
+        self._cache_all_pixmaps()
         
         self.frame_slider.setRange(0, max(0, len(frames) - 1))
         self.frame_slider.setValue(0)
@@ -126,12 +136,39 @@ class AnimationPreview(QWidget):
         self._update_display()
         self._update_labels()
     
+    def _cache_all_pixmaps(self):
+        """缓存所有帧的 pixmap（保留透明通道）"""
+        self._cached_pixmaps = []
+        for frame in self._frames:
+            pixmap = self._numpy_to_pixmap(frame)
+            self._cached_pixmaps.append(pixmap)
+    
+    def _numpy_to_pixmap(self, array: np.ndarray) -> QPixmap:
+        """将 numpy 数组转换为 QPixmap，保留透明通道"""
+        if array is None:
+            return QPixmap()
+        
+        h, w = array.shape[:2]
+        
+        if len(array.shape) == 2:
+            qimg = QImage(array.data, w, h, w, QImage.Format_Grayscale8)
+        elif array.shape[2] == 3:
+            qimg = QImage(array.data, w, h, w * 3, QImage.Format_RGB888)
+        elif array.shape[2] == 4:
+            # RGBA 图 - 保留透明通道
+            qimg = QImage(array.data, w, h, w * 4, QImage.Format_RGBA8888)
+        else:
+            return QPixmap()
+        
+        return QPixmap.fromImage(qimg.copy())
+    
     def clear(self):
         """清空帧"""
         self.stop()
         self._frames = []
         self._timestamps = None
         self._current_index = 0
+        self._cached_pixmaps = []
         self.frame_slider.setRange(0, 0)
         self.image_label.clear()
         self._update_labels()
@@ -150,15 +187,11 @@ class AnimationPreview(QWidget):
         self._is_playing = True
         self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
         
-        # 如果提供了时间戳，计算平均帧率
         if self._timestamps and len(self._timestamps) > 1:
-            # 计算总时长
             total_duration = self._timestamps[-1] - self._timestamps[0]
-            # 计算平均帧率
             avg_fps = (len(self._frames) - 1) / total_duration if total_duration > 0 else self._fps
             interval = int(1000 / avg_fps)
         else:
-            # 使用默认帧率
             interval = int(1000 / self._fps)
         
         self._timer.start(interval)
@@ -208,12 +241,9 @@ class AnimationPreview(QWidget):
     def _on_bg_changed(self, index):
         """背景模式改变"""
         self._bg_mode = self.bg_combo.currentData()
-        
-        # 如果是自定义模式，显示颜色选择按钮
         self.color_btn.setVisible(self._bg_mode == "custom")
-        
-        # 重新渲染
-        self._update_display()
+        # 切换背景样式（零计算）
+        self._update_bg_style()
     
     def _choose_bg_color(self):
         """选择自定义背景色"""
@@ -227,9 +257,10 @@ class AnimationPreview(QWidget):
             self._custom_bg_color = (color.red(), color.green(), color.blue())
             self.color_btn.setStyleSheet(
                 f"background-color: rgb({color.red()}, {color.green()}, {color.blue()}); "
-                f"border: 1px solid #666; border-radius: 3px;"
+                "border: 1px solid #666; border-radius: 3px;"
             )
-            self._update_display()
+            # 切换背景样式（零计算）
+            self._update_bg_style()
     
     def _update_display(self):
         """更新显示"""
@@ -237,48 +268,14 @@ class AnimationPreview(QWidget):
             self.image_label.clear()
             return
         
-        frame = self._frames[self._current_index]
-        
-        # 如果有透明通道，根据背景模式合成
-        if len(frame.shape) == 3 and frame.shape[2] == 4:
-            frame = self._composite_background(frame)
-        
-        pixmap = numpy_to_qpixmap(frame)
+        pixmap = self._cached_pixmaps[self._current_index]
+        # 缩放到适合显示的大小
         scaled = pixmap.scaled(
             self.image_label.size(),
             Qt.KeepAspectRatio,
             Qt.SmoothTransformation
         )
         self.image_label.setPixmap(scaled)
-    
-    def _composite_background(self, image: np.ndarray) -> np.ndarray:
-        """将透明图像合成到指定背景"""
-        if self._bg_mode == "checkerboard":
-            # 棋盘格背景
-            return composite_on_checkerboard(image)
-        
-        # 创建纯色背景
-        h, w = image.shape[:2]
-        
-        if self._bg_mode == "white":
-            background = np.ones((h, w, 3), dtype=np.uint8) * 255
-        elif self._bg_mode == "black":
-            background = np.zeros((h, w, 3), dtype=np.uint8)
-        elif self._bg_mode == "gray":
-            background = np.ones((h, w, 3), dtype=np.uint8) * 128
-        elif self._bg_mode == "custom":
-            background = np.ones((h, w, 3), dtype=np.uint8)
-            background[:, :] = self._custom_bg_color
-        else:
-            # 默认棋盘格
-            return composite_on_checkerboard(image)
-        
-        # Alpha 混合
-        alpha = image[:, :, 3:4] / 255.0
-        rgb = image[:, :, :3]
-        result = (rgb * alpha + background * (1 - alpha)).astype(np.uint8)
-        
-        return result
     
     def _update_labels(self):
         """更新标签"""

@@ -108,6 +108,7 @@ class FrameThumbnail(QFrame):
         self.thumbnail_size = thumbnail_size
         self._is_selected = False
         self._image: Optional[np.ndarray] = None
+        self._display_pixmap: Optional[QPixmap] = None  # 缓存显示用的 pixmap
         
         self.setup_ui()
     
@@ -146,20 +147,24 @@ class FrameThumbnail(QFrame):
         self._update_pixmap()
     
     def _update_pixmap(self):
+        """更新 pixmap，缓存合成结果"""
         if self._image is None:
+            self._display_pixmap = None
+            self.image_label.setPixmap(QPixmap())
             return
         
-        # 如果有透明通道，合成到棋盘格背景
+        # 如果有透明通道，先合成到棋盘格背景
         display_image = self._image
         if len(self._image.shape) == 3 and self._image.shape[2] == 4:
             display_image = composite_on_checkerboard(self._image)
         
+        # 转换为 pixmap 并缩放
         pixmap = numpy_to_qpixmap(display_image)
-        scaled = pixmap.scaled(
+        self._display_pixmap = pixmap.scaled(
             self.thumbnail_size, self.thumbnail_size,
             Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
-        self.image_label.setPixmap(scaled)
+        self.image_label.setPixmap(self._display_pixmap)
     
     def set_selected(self, selected: bool):
         """设置选中状态"""
