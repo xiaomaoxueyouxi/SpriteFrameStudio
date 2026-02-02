@@ -173,43 +173,51 @@ class VideoProcessor:
 
     def _get_frame_seek(self, frame_index: int) -> Optional[np.ndarray]:
         """使用帧定位获取帧（适用于支持随机访问的视频）"""
-        self._cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-        ret, frame = self._cap.read()
-        if ret:
-            return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        return None
+        with self._lock:
+            try:
+                self._cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+                ret, frame = self._cap.read()
+                if ret:
+                    return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            except Exception as e:
+                print(f"Error in _get_frame_seek: {e}")
+            return None
 
     def _get_frame_sequential(self, frame_index: int) -> Optional[np.ndarray]:
         """顺序读取获取帧（适用于不支持随机访问的视频）"""
-        # 如果请求的是连续帧，直接从当前位置读取
-        if frame_index == self._last_accessed_frame + 1:
-            ret, frame = self._cap.read()
-            if ret:
-                return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        with self._lock:
+            try:
+                # 如果请求的是连续帧，直接从当前位置读取
+                if frame_index == self._last_accessed_frame + 1:
+                    ret, frame = self._cap.read()
+                    if ret:
+                        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    return None
+
+                # 如果请求的是已经缓存的帧附近，从缓存恢复
+                if frame_index > 0 and (frame_index - 1) in self._frame_cache:
+                    # 从上一帧继续读取
+                    pass
+                else:
+                    # 需要重新定位：使用基于时间的定位尝试
+                    timestamp_ms = (frame_index / self._video_info.fps) * 1000
+                    self._cap.set(cv2.CAP_PROP_POS_MSEC, timestamp_ms)
+                    actual_pos = self._cap.get(cv2.CAP_PROP_POS_FRAMES)
+                    
+                    # 如果时间定位也失败，重新打开视频
+                    if actual_pos < 0:
+                        self._cap.release()
+                        self._cap = cv2.VideoCapture(str(self._video_info.path))
+                        # 顺序读取到目标帧
+                        for _ in range(frame_index):
+                            self._cap.read()
+
+                ret, frame = self._cap.read()
+                if ret:
+                    return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            except Exception as e:
+                print(f"Error in _get_frame_sequential: {e}")
             return None
-
-        # 如果请求的是已经缓存的帧附近，从缓存恢复
-        if frame_index > 0 and (frame_index - 1) in self._frame_cache:
-            # 从上一帧继续读取
-            pass
-        else:
-            # 需要重新定位：使用基于时间的定位尝试
-            timestamp_ms = (frame_index / self._video_info.fps) * 1000
-            self._cap.set(cv2.CAP_PROP_POS_MSEC, timestamp_ms)
-            actual_pos = self._cap.get(cv2.CAP_PROP_POS_FRAMES)
-            
-            # 如果时间定位也失败，重新打开视频
-            if actual_pos < 0:
-                self._cap.release()
-                self._cap = cv2.VideoCapture(str(self._video_info.path))
-                # 顺序读取到目标帧
-                for _ in range(frame_index):
-                    self._cap.read()
-
-        ret, frame = self._cap.read()
-        if ret:
-            return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        return None
 
     def _add_to_cache(self, frame_index: int, frame: np.ndarray):
         """添加帧到缓存"""
@@ -294,10 +302,15 @@ class VideoProcessor:
                     with self._lock:
                         if frame_index in self._frame_cache:
                             continue
-                    # 预加载帧
-                    self.get_frame_by_index(frame_index)
+                    # 预加载帧，添加异常捕获
+                    try:
+                        self.get_frame_by_index(frame_index)
+                    except Exception as e:
+                        print(f"Error in preload: {e}")
+                        # 短暂休眠，避免连续错误
+                        time.sleep(0.05)
                 # 短暂休眠，避免占用过多CPU
-                time.sleep(0.01)
+                time.sleep(0.02)
             else:
                 # 没有需要预加载的帧，休眠一段时间
-                time.sleep(0.1)
+                time.sleep(0.2)
