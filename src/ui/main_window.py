@@ -447,6 +447,10 @@ class MainWindow(QMainWindow):
         self.find_loop_btn = QPushButton("➰寻找循环")
         self.find_loop_btn.clicked.connect(self._find_loop_frame)
         tools_layout.addWidget(self.find_loop_btn)
+        
+        self.find_similar_btn = QPushButton("🔍 查找相似帧")
+        self.find_similar_btn.clicked.connect(self._find_most_similar_frames)
+        tools_layout.addWidget(self.find_similar_btn)
         group_layout.addLayout(tools_layout)
         
         # 相似度阈值
@@ -459,6 +463,17 @@ class MainWindow(QMainWindow):
         sim_row.addWidget(self.similarity_spin)
         sim_row.addStretch()
         group_layout.addLayout(sim_row)
+        
+        # 帧间隔
+        interval_row = QHBoxLayout()
+        interval_row.addWidget(QLabel("帧间隔:"))
+        self.interval_spin = QSpinBox()
+        self.interval_spin.setRange(1, 30)
+        self.interval_spin.setValue(10)  # 默认10帧
+        self.interval_spin.setSuffix(" 帧")
+        interval_row.addWidget(self.interval_spin)
+        interval_row.addStretch()
+        group_layout.addLayout(interval_row)
         
         layout.addWidget(group)
         layout.addStretch()
@@ -2486,6 +2501,153 @@ class MainWindow(QMainWindow):
         count = self._frame_manager.frame_count
         selected = self._frame_manager.selected_count
         self.frame_count_label.setText(f"帧数: {count} (选中: {selected})")
+    
+    def _find_most_similar_frames(self):
+        """查找所有帧的最相似帧，要求相隔X帧以上"""
+        if self._frame_manager.frame_count == 0:
+            QMessageBox.warning(self, "提示", "请先提取视频帧")
+            return
+            
+        # 获取当前勾选的帧索引
+        selected_indices = self.frame_preview.get_selected_indices()
+            
+        if len(selected_indices) < 2:
+            QMessageBox.information(self, "提示", "当前勾选少于 2 帧，无法进行相似度对比")
+            return
+                
+        interval = self.interval_spin.value()
+        detect_mode = self.detect_mode_combo.currentData()
+            
+        # 根据模式获取已勾选帧中有数据的帧
+        frames_with_data = []
+        for idx in selected_indices:
+            frame = self._frame_manager.get_frame(idx)
+            if not frame:
+                continue
+                    
+            if detect_mode == "contour":
+                if frame.contour_id:
+                    data = self._frame_manager.get_contour(frame.contour_id)
+                    if data:
+                        frames_with_data.append((frame, data))
+            elif detect_mode == "image":
+                if frame.image_feature_id:
+                    data = self._frame_manager.get_image_feature(frame.image_feature_id)
+                    if data:
+                        frames_with_data.append((frame, data))
+            elif detect_mode == "regional":
+                if hasattr(frame, 'regional_feature_id') and frame.regional_feature_id:
+                    data = self._frame_manager.get_regional_feature(frame.regional_feature_id)
+                    if data:
+                        frames_with_data.append((frame, data))
+            elif detect_mode in ("pose", "pose_rtm"):
+                if frame.pose_id:
+                    data = self._frame_manager.get_pose(frame.pose_id)
+                    if data:
+                        frames_with_data.append((frame, data))
+        
+        if len(frames_with_data) < 2:
+            mode_text = {"pose": "姿势", "pose_rtm": "姿势(RTM)", "contour": "轮廓", "image": "图像特征", "regional": "分区域SSIM"}.get(detect_mode, "检测")
+            QMessageBox.warning(self, "错误", f"选中帧中没有{mode_text}数据，请先进行检测")
+            return
+        
+        # 计算每一帧的最相似帧
+        similar_frames = []
+        processed_pairs = set()  # 用于去重
+        
+        for i, (frame1, data1) in enumerate(frames_with_data):
+            best_similarity = -1
+            best_frame = None
+            
+            for j, (frame2, data2) in enumerate(frames_with_data):
+                if i == j:
+                    continue
+                
+                # 检查帧间隔
+                if abs(frame1.index - frame2.index) < interval:
+                    continue
+                
+                # 检查是否已经处理过这对帧
+                pair_key = tuple(sorted((frame1.index, frame2.index)))
+                if pair_key in processed_pairs:
+                    continue
+                
+                # 计算相似度
+                similarity = data1.similarity_to(data2)
+                
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_frame = frame2
+            
+            if best_frame:
+                # 标记这对帧为已处理
+                pair_key = tuple(sorted((frame1.index, best_frame.index)))
+                processed_pairs.add(pair_key)
+                
+                similar_frames.append({
+                    "frame_index": frame1.index,
+                    "similar_frame_index": best_frame.index,
+                    "similarity": best_similarity
+                })
+        
+        # 按相似度从高到低排序
+        similar_frames.sort(key=lambda x: x["similarity"], reverse=True)
+        
+        # 显示结果
+        self._show_similar_frames_result(similar_frames)
+    
+    def _show_similar_frames_result(self, similar_frames):
+        """显示相似帧结果"""
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit, QPushButton, QScrollArea
+        from PySide6.QtCore import Qt
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("最相似帧分析结果")
+        dialog.resize(500, 400)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # 结果文本
+        result_text = "最相似帧分析结果\n\n"
+        result_text += f"共分析 {len(similar_frames)} 帧\n\n"
+        result_text += "按相似度从高到低排序:\n\n"
+        
+        for i, item in enumerate(similar_frames, 1):
+            frame_idx = item["frame_index"]
+            similar_idx = item["similar_frame_index"]
+            similarity = item["similarity"] * 100
+            result_text += f"{i}. 帧 {frame_idx} 的最相似帧是 帧 {similar_idx} (相似度: {similarity:.2f}%)\n"
+        
+        # 文本编辑框
+        text_edit = QTextEdit()
+        text_edit.setPlainText(result_text)
+        text_edit.setReadOnly(True)
+        
+        # 滚动区域
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(text_edit)
+        layout.addWidget(scroll_area, 1)
+        
+        # 按钮布局
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        
+        # 复制按钮
+        copy_btn = QPushButton("复制结果")
+        def copy_result():
+            dialog.clipboard().setText(result_text)
+        copy_btn.clicked.connect(copy_result)
+        btn_layout.addWidget(copy_btn)
+        
+        # 关闭按钮
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(dialog.accept)
+        btn_layout.addWidget(close_btn)
+        
+        layout.addLayout(btn_layout)
+        
+        dialog.exec()
     
     def closeEvent(self, event):
         """关闭事件"""
