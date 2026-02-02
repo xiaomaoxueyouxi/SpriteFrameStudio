@@ -101,6 +101,29 @@ class RangeSelector(QWidget):
             return
 
         pos_x = event.position().x()
+        
+        # 首先检查是否点击了滑块
+        start_x = self._time_to_x(self._start)
+        end_x = self._time_to_x(self._end)
+        handle_hit = 12
+
+        # 检查滑块点击
+        if abs(pos_x - start_x) <= handle_hit:
+            self._drag_mode = "left"
+            self._current = self._start
+            self.update()
+            self._emit_seek_on_release = False
+            self._is_dragging = True
+            return
+        elif abs(pos_x - end_x) <= handle_hit:
+            self._drag_mode = "right"
+            self._current = self._end
+            self.update()
+            self._emit_seek_on_release = False
+            self._is_dragging = True
+            return
+        
+        # 然后检查轨道区域
         track = self._track_rect()
         if not track.contains(event.position()):
             return
@@ -109,15 +132,8 @@ class RangeSelector(QWidget):
         self._current = t
         self.update()
 
-        start_x = self._time_to_x(self._start)
-        end_x = self._time_to_x(self._end)
-        handle_hit = 6
-
-        if abs(pos_x - start_x) <= handle_hit:
-            self._drag_mode = "left"
-        elif abs(pos_x - end_x) <= handle_hit:
-            self._drag_mode = "right"
-        elif min(start_x, end_x) <= pos_x <= max(start_x, end_x):
+        # 检查其他模式
+        if min(start_x, end_x) <= pos_x <= max(start_x, end_x):
             self._drag_mode = "range"
             self._drag_anchor_time = t
             self._drag_start = self._start
@@ -139,7 +155,7 @@ class RangeSelector(QWidget):
             # Update cursor
             start_x = self._time_to_x(self._start)
             end_x = self._time_to_x(self._end)
-            handle_hit = 6
+            handle_hit = 12
             if abs(pos_x - start_x) <= handle_hit or abs(pos_x - end_x) <= handle_hit:
                 self.setCursor(QCursor(Qt.SizeHorCursor))
             elif min(start_x, end_x) <= pos_x <= max(start_x, end_x):
