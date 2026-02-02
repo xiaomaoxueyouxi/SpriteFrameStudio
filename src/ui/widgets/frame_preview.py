@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QCheckBox, QFrame, QSizePolicy,
     QPushButton, QDialog, QSpinBox
 )
-from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtCore import Qt, Signal, QSize, QEvent
 from PySide6.QtGui import QPixmap, QImage, QPainter, QColor
 import numpy as np
 
@@ -98,7 +98,7 @@ class FrameZoomDialog(QDialog):
 class FrameThumbnail(QFrame):
     """单个帧缩略图控件"""
     
-    clicked = Signal(int)  # frame_index
+    clicked = Signal(int, bool)  # frame_index, shift_pressed
     double_clicked = Signal(int)  # frame_index - 双击放大
     selection_changed = Signal(int, bool)  # frame_index, is_selected
     
@@ -133,6 +133,8 @@ class FrameThumbnail(QFrame):
         self.checkbox = QCheckBox()
         self.checkbox.setChecked(False)
         self.checkbox.stateChanged.connect(self._on_checkbox_changed)
+        # 安装事件过滤器来捕获 Shift 键状态
+        self.checkbox.installEventFilter(self)
         layout.addWidget(self.checkbox, alignment=Qt.AlignCenter)
         
         self.setFrameStyle(QFrame.Box)
@@ -167,9 +169,23 @@ class FrameThumbnail(QFrame):
         self.checkbox.blockSignals(False)
         self.update_style()
     
+    def eventFilter(self, obj, event):
+        """事件过滤器，捕获复选框的鼠标点击事件"""
+        if obj == self.checkbox and event.type() == QEvent.Type.MouseButtonPress:
+            if event.button() == Qt.LeftButton:
+                # 检测 Shift 键状态
+                shift_pressed = event.modifiers() & Qt.ShiftModifier
+                # 发送点击信号（带 Shift 状态）
+                self.clicked.emit(self.frame_index, bool(shift_pressed))
+                # 如果按下了 Shift，阻止复选框的默认行为
+                if shift_pressed:
+                    return True  # 阻止事件继续传播
+        return super().eventFilter(obj, event)
+    
     def _on_checkbox_changed(self, state):
         # PySide6 中 state 可能是 Qt.CheckState 枚举或整数
-        self._is_selected = (state == Qt.CheckState.Checked or state == 2)
+        is_selected = (state == Qt.CheckState.Checked or state == 2)
+        self._is_selected = is_selected
         self.update_style()
         self.selection_changed.emit(self.frame_index, self._is_selected)
     
@@ -199,7 +215,8 @@ class FrameThumbnail(QFrame):
     
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self.clicked.emit(self.frame_index)
+            # 普通点击，不传递 Shift 键状态
+            self.clicked.emit(self.frame_index, False)
         super().mousePressEvent(event)
     
     def mouseDoubleClickEvent(self, event):
@@ -226,6 +243,7 @@ class FramePreview(QWidget):
         self.columns = columns
         self._thumbnails: List[FrameThumbnail] = []
         self._batch_update_mode = False  # 批量更新模式，禁止信号触发
+        self._last_clicked_index: Optional[int] = None  # 记录最后一次单击选中的帧索引
         
         self.setup_ui()
     
@@ -285,7 +303,7 @@ class FramePreview(QWidget):
         toolbar.addWidget(self.selection_info)
         
         # 提示
-        tip_label = QLabel("(双击帧可放大，预览中可导出单帧)")
+        tip_label = QLabel("(双击帧可放大，预览中可导出单帧 | Shift+点击可连续选中)")
         tip_label.setStyleSheet("color: #666; font-size: 11px;")
         toolbar.addWidget(tip_label)
         
@@ -413,7 +431,24 @@ class FramePreview(QWidget):
         msg = f"间隔选帧完成：从 {len(selected_indices)} 帧中保留了 {len(new_selection)} 帧"
         self.status_message.emit(msg)
 
-    def _on_thumbnail_clicked(self, frame_index: int):
+    def _on_thumbnail_clicked(self, frame_index: int, shift_pressed: bool = False):
+        """处理缩略图点击事件，支持Shift连续选中"""
+        if shift_pressed and self._last_clicked_index is not None:
+            # Shift + 点击复选框：连续选中范围内的帧
+            start_idx = min(self._last_clicked_index, frame_index)
+            end_idx = max(self._last_clicked_index, frame_index)
+            
+            self.begin_batch_update()
+            # 选中范围内的所有帧
+            for thumb in self._thumbnails:
+                if start_idx <= thumb.frame_index <= end_idx:
+                    thumb.set_selected(True)
+            self.end_batch_update()
+            
+            # 更新最后点击的索引
+            self._last_clicked_index = frame_index
+        
+        # 发送点击信号用于预览
         self.frame_clicked.emit(frame_index)
     
     def _on_thumbnail_double_clicked(self, frame_index: int):
@@ -429,6 +464,11 @@ class FramePreview(QWidget):
                 break
     
     def _on_selection_changed(self, frame_index: int, is_selected: bool):
+        """处理选中状态变化，记录最后一次选中的帧"""
+        # 记录最后一次选中的帧索引，用于Shift连续选中
+        if is_selected:
+            self._last_clicked_index = frame_index
+        
         self._update_selection_info()
         # 批量更新模式下不发送信号
         if not self._batch_update_mode:
