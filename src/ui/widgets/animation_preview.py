@@ -16,6 +16,7 @@ class AnimationPreview(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._frames: List[np.ndarray] = []
+        self._timestamps: List[float] = None
         self._current_index = 0
         self._is_playing = False
         self._fps = 24.0
@@ -107,10 +108,16 @@ class AnimationPreview(QWidget):
         bg_layout.addStretch()
         layout.addLayout(bg_layout)
     
-    def set_frames(self, frames: List[np.ndarray]):
-        """设置帧序列"""
+    def set_frames(self, frames: List[np.ndarray], timestamps: List[float] = None):
+        """设置帧序列
+        
+        Args:
+            frames: 帧图像列表
+            timestamps: 帧时间戳列表（可选）
+        """
         self.stop()
         self._frames = frames
+        self._timestamps = timestamps
         self._current_index = 0
         
         self.frame_slider.setRange(0, max(0, len(frames) - 1))
@@ -123,6 +130,7 @@ class AnimationPreview(QWidget):
         """清空帧"""
         self.stop()
         self._frames = []
+        self._timestamps = None
         self._current_index = 0
         self.frame_slider.setRange(0, 0)
         self.image_label.clear()
@@ -141,7 +149,18 @@ class AnimationPreview(QWidget):
             return
         self._is_playing = True
         self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
-        interval = int(1000 / self._fps)
+        
+        # 如果提供了时间戳，计算平均帧率
+        if self._timestamps and len(self._timestamps) > 1:
+            # 计算总时长
+            total_duration = self._timestamps[-1] - self._timestamps[0]
+            # 计算平均帧率
+            avg_fps = (len(self._frames) - 1) / total_duration if total_duration > 0 else self._fps
+            interval = int(1000 / avg_fps)
+        else:
+            # 使用默认帧率
+            interval = int(1000 / self._fps)
+        
         self._timer.start(interval)
     
     def pause(self):

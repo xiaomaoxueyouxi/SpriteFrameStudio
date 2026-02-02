@@ -2465,19 +2465,21 @@ class MainWindow(QMainWindow):
             self.animation_preview.set_frames([])
             return
         
-        # 获取图像
+        # 获取图像和时间戳
         images = []
+        timestamps = []
         for idx in selected_indices:
             frame = self._frame_manager.get_frame(idx)
             if frame:
                 img = frame.display_image
                 if img is not None:
                     images.append(img)
+                    timestamps.append(frame.timestamp)
         
         print(f"[DEBUG] 实际加载 {len(images)} 帧到动画预览")  # 调试信息
         
         if images:
-            self.animation_preview.set_frames(images)
+            self.animation_preview.set_frames(images, timestamps)
     
     def _update_frame_count(self):
         """更新帧计数"""

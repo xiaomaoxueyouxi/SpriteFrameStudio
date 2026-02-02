@@ -75,10 +75,13 @@ class FrameExtractor:
             
             # 生成时间戳列表
             timestamps = []
-            current_time = start_time
-            while current_time <= end_time:
-                timestamps.append(current_time)
-                current_time += frame_interval
+            # 计算总帧数
+            total_frames = int(duration * extract_fps) + 1
+            # 使用帧索引计算时间戳，避免浮点误差累积
+            for i in range(total_frames):
+                timestamp = start_time + i * frame_interval
+                if timestamp <= end_time:
+                    timestamps.append(timestamp)
             
             total_frames = len(timestamps)
             

@@ -294,6 +294,7 @@ class FrameTimeline(QWidget):
         self.start_spin.setDecimals(3)
         self.start_spin.setSuffix(" 秒")
         self.start_spin.valueChanged.connect(self._on_start_changed)
+        self.start_spin.setEnabled(False)  # 禁用输入，使用范围选择器
         start_layout.addWidget(self.start_spin, 1)
         layout.addLayout(start_layout)
         
@@ -305,6 +306,7 @@ class FrameTimeline(QWidget):
         self.end_spin.setDecimals(3)
         self.end_spin.setSuffix(" 秒")
         self.end_spin.valueChanged.connect(self._on_end_changed)
+        self.end_spin.setEnabled(False)  # 禁用输入，使用范围选择器
         end_layout.addWidget(self.end_spin, 1)
         layout.addLayout(end_layout)
         
