@@ -81,7 +81,7 @@ class FrameZoomDialog(QDialog):
         
         scaled = pixmap.scaled(
             max_size, max_size,
-            Qt.KeepAspectRatio, Qt.SmoothTransformation
+            Qt.KeepAspectRatio, Qt.FastTransformation
         )
         self.image_label.setPixmap(scaled)
     
@@ -162,7 +162,7 @@ class FrameThumbnail(QFrame):
         pixmap = numpy_to_qpixmap(display_image)
         self._display_pixmap = pixmap.scaled(
             self.thumbnail_size, self.thumbnail_size,
-            Qt.KeepAspectRatio, Qt.SmoothTransformation
+            Qt.KeepAspectRatio, Qt.FastTransformation
         )
         self.image_label.setPixmap(self._display_pixmap)
     

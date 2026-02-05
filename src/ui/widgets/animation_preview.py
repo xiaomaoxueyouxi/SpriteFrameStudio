@@ -273,7 +273,7 @@ class AnimationPreview(QWidget):
         scaled = pixmap.scaled(
             self.image_label.size(),
             Qt.KeepAspectRatio,
-            Qt.SmoothTransformation
+            Qt.FastTransformation
         )
         self.image_label.setPixmap(scaled)
     
