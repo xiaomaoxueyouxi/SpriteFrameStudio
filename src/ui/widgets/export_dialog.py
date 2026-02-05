@@ -5,12 +5,13 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox,
     QPushButton, QFileDialog, QLineEdit, QRadioButton,
-    QButtonGroup, QTabWidget, QWidget, QMessageBox
+    QButtonGroup, QTabWidget, QWidget, QMessageBox, QSlider
 )
 from PySide6.QtCore import Qt
 
 from src.models.export_config import ExportConfig, ExportFormat, LayoutMode, ResampleFilter
 from src.utils.config import config
+from src.utils.pngquant import is_pngquant_available
 
 
 class ExportDialog(QDialog):
@@ -78,6 +79,36 @@ class ExportDialog(QDialog):
         self.browse_btn.clicked.connect(self._browse_path)
         dir_layout.addWidget(self.browse_btn)
         path_layout.addLayout(dir_layout)
+        
+        # PNG压缩选项
+        compress_layout = QHBoxLayout()
+        self.compress_check = QCheckBox("PNG压缩 (pngquant)")
+        self.compress_check.setChecked(False)
+        self.compress_check.stateChanged.connect(self._on_compress_changed)
+        compress_layout.addWidget(self.compress_check)
+        
+        compress_layout.addWidget(QLabel("质量:"))
+        self.quality_slider = QSlider(Qt.Horizontal)
+        self.quality_slider.setRange(40, 100)
+        self.quality_slider.setValue(80)
+        self.quality_slider.setFixedWidth(100)
+        self.quality_slider.setEnabled(False)
+        self.quality_slider.valueChanged.connect(self._on_quality_changed)
+        compress_layout.addWidget(self.quality_slider)
+        
+        self.quality_label = QLabel("80")
+        self.quality_label.setFixedWidth(25)
+        self.quality_label.setEnabled(False)
+        compress_layout.addWidget(self.quality_label)
+        
+        compress_layout.addStretch()
+        
+        # 检查 pngquant 是否可用
+        if not is_pngquant_available():
+            self.compress_check.setEnabled(False)
+            self.compress_check.setToolTip("pngquant.exe 未找到")
+        
+        path_layout.addLayout(compress_layout)
         
         layout.addWidget(path_group)
         
@@ -566,6 +597,16 @@ class ExportDialog(QDialog):
             self.frames_width_spin.setValue(new_width)
             self._updating_size = False
     
+    def _on_compress_changed(self, state):
+        """压缩选项变化"""
+        enabled = state == Qt.Checked
+        self.quality_slider.setEnabled(enabled)
+        self.quality_label.setEnabled(enabled)
+    
+    def _on_quality_changed(self, value):
+        """质量滑块变化"""
+        self.quality_label.setText(str(value))
+    
     def _browse_path(self):
         # 从上次路径或当前路径开始
         start_dir = self.path_edit.text() or config.last_export_dir or ""
@@ -699,5 +740,11 @@ class ExportDialog(QDialog):
         # if not self.godot_original_size_check.isChecked():
         #     config.godot_config.frame_width = self.godot_width_spin.value()
         #     config.godot_config.frame_height = self.godot_height_spin.value()
+        
+        # PNG压缩配置
+        config.pngquant_config.enabled = self.compress_check.isChecked()
+        quality = self.quality_slider.value()
+        config.pngquant_config.quality_min = max(quality - 20, 0)
+        config.pngquant_config.quality_max = quality
         
         return config

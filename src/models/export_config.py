@@ -67,11 +67,24 @@ class GodotConfig(BaseModel):
     resample_filter: ResampleFilter = Field(default=ResampleFilter.LANCZOS, description="缩放算法")
 
 
+class PngQuantConfig(BaseModel):
+    """PNG压缩配置"""
+    enabled: bool = Field(default=False, description="是否启用压缩")
+    quality_min: int = Field(default=60, ge=0, le=100, description="最低质量")
+    quality_max: int = Field(default=80, ge=0, le=100, description="最高质量")
+
+
 class ExportConfig(BaseModel):
     """导出配置模型"""
     format: ExportFormat = Field(default=ExportFormat.SPRITE_SHEET, description="导出格式")
     output_path: Optional[Path] = Field(default=None, description="输出路径")
     output_name: str = Field(default="sprite", description="输出文件名(不含扩展名)")
+    
+    # PNG压缩配置
+    pngquant_config: PngQuantConfig = Field(
+        default_factory=PngQuantConfig,
+        description="PNG压缩配置"
+    )
     
     # 精灵图配置
     sprite_config: SpriteSheetConfig = Field(
