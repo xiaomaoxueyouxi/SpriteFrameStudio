@@ -1226,9 +1226,13 @@ class MainWindow(QMainWindow):
         
         # 创建快照
         if mode == BackgroundMode.AI:
-            description = f"AI抠图 {ai_params['model']} | {len(selected_indices)}帧"
+            model_name = ai_params.get('model', 'u2net') if ai_params else 'u2net'
+            description = f"AI抠图 {model_name} | {len(selected_indices)}帧"
         else:
-            description = f"颜色过滤 {color_params['color']} | {len(selected_indices)}帧"
+            # 颜色模式：显示HSV范围
+            lower = color_params.get('lower', (0, 0, 0)) if color_params else (0, 0, 0)
+            upper = color_params.get('upper', (180, 255, 255)) if color_params else (180, 255, 255)
+            description = f"颜色过滤 HSV({lower[0]}-{upper[0]}, {lower[1]}-{upper[1]}, {lower[2]}-{upper[2]}) | {len(selected_indices)}帧"
         
         self._history_manager.push_snapshot(
             "背景处理",

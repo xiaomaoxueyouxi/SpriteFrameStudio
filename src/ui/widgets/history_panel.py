@@ -21,6 +21,7 @@ class HistoryEntryWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 5, 10, 5)
         layout.setSpacing(2)
+        self.setFixedHeight(60)  # 固定高度避免拉伸
 
         # 标题栏
         title_layout = QHBoxLayout()
@@ -119,7 +120,8 @@ class HistoryPanel(QWidget):
         self.content_widget = QWidget()
         self.content_layout = QVBoxLayout(self.content_widget)
         self.content_layout.setContentsMargins(0, 5, 0, 5)
-        self.content_layout.setSpacing(0)
+        self.content_layout.setSpacing(2)  # 减少条目间距
+        self.content_layout.setAlignment(Qt.AlignTop)  # 内容顶部对齐
 
         # 初始状态提示
         self.initial_state_label = QLabel("  ⚪ 初始状态（帧提取完成）")
