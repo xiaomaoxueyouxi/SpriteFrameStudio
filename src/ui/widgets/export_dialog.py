@@ -80,35 +80,78 @@ class ExportDialog(QDialog):
         dir_layout.addWidget(self.browse_btn)
         path_layout.addLayout(dir_layout)
         
-        # PNG压缩选项
-        compress_layout = QHBoxLayout()
-        self.compress_check = QCheckBox("PNG压缩 (pngquant)")
-        self.compress_check.setChecked(False)
-        self.compress_check.stateChanged.connect(self._on_compress_changed)
-        compress_layout.addWidget(self.compress_check)
+        # 格式选项组
+        format_group = QGroupBox("格式选项")
+        format_layout = QVBoxLayout(format_group)
         
-        compress_layout.addWidget(QLabel("质量:"))
+        # 创建单选组
+        self.format_group = QButtonGroup(self)
+        
+        # 原始格式选项
+        self.original_radio = QRadioButton("原始格式")
+        self.original_radio.setChecked(True)
+        self.format_group.addButton(self.original_radio)
+        format_layout.addWidget(self.original_radio)
+        
+        # PNG压缩选项
+        png_layout = QHBoxLayout()
+        png_layout.addSpacing(20)
+        self.png_compress_radio = QRadioButton("PNG压缩 (pngquant)")
+        self.format_group.addButton(self.png_compress_radio)
+        png_layout.addWidget(self.png_compress_radio)
+        
+        png_layout.addWidget(QLabel("质量:"))
         self.quality_slider = QSlider(Qt.Horizontal)
         self.quality_slider.setRange(40, 100)
         self.quality_slider.setValue(80)
         self.quality_slider.setFixedWidth(100)
         self.quality_slider.setEnabled(False)
         self.quality_slider.valueChanged.connect(self._on_quality_changed)
-        compress_layout.addWidget(self.quality_slider)
+        png_layout.addWidget(self.quality_slider)
         
         self.quality_label = QLabel("80")
         self.quality_label.setFixedWidth(25)
         self.quality_label.setEnabled(False)
-        compress_layout.addWidget(self.quality_label)
+        png_layout.addWidget(self.quality_label)
         
-        compress_layout.addStretch()
+        png_layout.addStretch()
+        format_layout.addLayout(png_layout)
+        
+        # WebP格式选项
+        webp_layout = QHBoxLayout()
+        webp_layout.addSpacing(20)
+        self.webp_radio = QRadioButton("WebP格式")
+        self.format_group.addButton(self.webp_radio)
+        webp_layout.addWidget(self.webp_radio)
+        
+        webp_layout.addWidget(QLabel("质量:"))
+        self.webp_quality_slider = QSlider(Qt.Horizontal)
+        self.webp_quality_slider.setRange(1, 100)
+        self.webp_quality_slider.setValue(80)
+        self.webp_quality_slider.setFixedWidth(100)
+        self.webp_quality_slider.setEnabled(False)
+        self.webp_quality_slider.valueChanged.connect(self._on_webp_quality_changed)
+        webp_layout.addWidget(self.webp_quality_slider)
+        
+        self.webp_quality_label = QLabel("80")
+        self.webp_quality_label.setFixedWidth(25)
+        self.webp_quality_label.setEnabled(False)
+        webp_layout.addWidget(self.webp_quality_label)
+        
+        webp_layout.addStretch()
+        format_layout.addLayout(webp_layout)
         
         # 检查 pngquant 是否可用
         if not is_pngquant_available():
-            self.compress_check.setEnabled(False)
-            self.compress_check.setToolTip("pngquant.exe 未找到")
+            self.png_compress_radio.setEnabled(False)
+            self.png_compress_radio.setToolTip("pngquant.exe 未找到")
         
-        path_layout.addLayout(compress_layout)
+        # 连接信号
+        self.original_radio.toggled.connect(self._on_format_changed)
+        self.png_compress_radio.toggled.connect(self._on_format_changed)
+        self.webp_radio.toggled.connect(self._on_format_changed)
+        
+        path_layout.addWidget(format_group)
         
         layout.addWidget(path_group)
         
@@ -402,6 +445,8 @@ class ExportDialog(QDialog):
         layout.addStretch()
         return widget
     
+
+    
     def _create_godot_tab(self) -> QWidget:
         """创建Godot选项卡"""
         widget = QWidget()
@@ -597,11 +642,27 @@ class ExportDialog(QDialog):
             self.frames_width_spin.setValue(new_width)
             self._updating_size = False
     
-    def _on_compress_changed(self, state):
-        """压缩选项变化"""
-        enabled = state == Qt.Checked
-        self.quality_slider.setEnabled(enabled)
-        self.quality_label.setEnabled(enabled)
+
+    
+    def _on_format_changed(self):
+        """格式选项变化"""
+        # 禁用所有滑块
+        self.quality_slider.setEnabled(False)
+        self.quality_label.setEnabled(False)
+        self.webp_quality_slider.setEnabled(False)
+        self.webp_quality_label.setEnabled(False)
+        
+        # 根据选中的格式启用相应的滑块
+        if self.png_compress_radio.isChecked():
+            self.quality_slider.setEnabled(True)
+            self.quality_label.setEnabled(True)
+        elif self.webp_radio.isChecked():
+            self.webp_quality_slider.setEnabled(True)
+            self.webp_quality_label.setEnabled(True)
+    
+    def _on_webp_quality_changed(self, value):
+        """WebP质量滑块变化"""
+        self.webp_quality_label.setText(str(value))
     
     def _on_quality_changed(self, value):
         """质量滑块变化"""
@@ -652,6 +713,17 @@ class ExportDialog(QDialog):
                     existing_files = [Path(f).name for f in existing_files[:3]]  # 只显示前3个文件
                     if len(existing_files) > 3:
                         existing_files.append("...")
+        elif self.tab_widget.currentIndex() == 3:  # WebP格式
+            # 检查输出目录是否存在
+            if output_path.exists():
+                # 检查是否有与输出名称相关的文件存在
+                import glob
+                existing_files = glob.glob(str(output_path / f"{output_name}_*.webp"))
+                if existing_files:
+                    file_exists = True
+                    existing_files = [Path(f).name for f in existing_files[:3]]  # 只显示前3个文件
+                    if len(existing_files) > 3:
+                        existing_files.append("...")
         
         # 如果文件已存在，询问是否覆盖
         if file_exists:
@@ -681,6 +753,7 @@ class ExportDialog(QDialog):
             self.gif_height_spin.setValue(height)
             self.frames_width_spin.setValue(width)
             self.frames_height_spin.setValue(height)
+            # WebP格式使用当前选项卡的尺寸设置，无需独立控件
             # Godot选项卡已隐藏，注释掉相关代码
             # self.godot_width_spin.setValue(width)
             # self.godot_height_spin.setValue(height)
@@ -698,6 +771,10 @@ class ExportDialog(QDialog):
             config.format = ExportFormat.FRAMES
         # elif self.tab_widget.currentIndex() == 3:
         #     config.format = ExportFormat.GODOT
+        
+        # 根据格式选项设置实际导出格式
+        if self.webp_radio.isChecked():
+            config.format = ExportFormat.WEBP
         
         # 输出路径
         config.output_name = self.name_edit.text() or "default"
@@ -741,8 +818,30 @@ class ExportDialog(QDialog):
         #     config.godot_config.frame_width = self.godot_width_spin.value()
         #     config.godot_config.frame_height = self.godot_height_spin.value()
         
+        # WebP配置
+        if config.format == ExportFormat.WEBP:
+            config.webp_config.quality = self.webp_quality_slider.value()
+            # 使用与当前选项卡相同的缩放算法
+            if self.tab_widget.currentIndex() == 0:
+                config.webp_config.resample_filter = ResampleFilter(self.resample_combo.currentData())
+            elif self.tab_widget.currentIndex() == 1:
+                config.webp_config.resample_filter = ResampleFilter(self.gif_resample_combo.currentData())
+            elif self.tab_widget.currentIndex() == 2:
+                config.webp_config.resample_filter = ResampleFilter(self.frames_resample_combo.currentData())
+            
+            # 使用与当前选项卡相同的尺寸设置
+            if self.tab_widget.currentIndex() == 0 and not self.original_size_check.isChecked():
+                config.webp_config.frame_width = self.frame_width_spin.value()
+                config.webp_config.frame_height = self.frame_height_spin.value()
+            elif self.tab_widget.currentIndex() == 1 and not self.gif_original_size_check.isChecked():
+                config.webp_config.frame_width = self.gif_width_spin.value()
+                config.webp_config.frame_height = self.gif_height_spin.value()
+            elif self.tab_widget.currentIndex() == 2 and not self.frames_original_size_check.isChecked():
+                config.webp_config.frame_width = self.frames_width_spin.value()
+                config.webp_config.frame_height = self.frames_height_spin.value()
+        
         # PNG压缩配置
-        config.pngquant_config.enabled = self.compress_check.isChecked()
+        config.pngquant_config.enabled = self.png_compress_radio.isChecked()
         quality = self.quality_slider.value()
         config.pngquant_config.quality_min = max(quality - 20, 0)
         config.pngquant_config.quality_max = quality

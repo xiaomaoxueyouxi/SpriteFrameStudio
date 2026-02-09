@@ -269,11 +269,30 @@ class AnimationPreview(QWidget):
             return
         
         pixmap = self._cached_pixmaps[self._current_index]
-        # 缩放到适合显示的大小
+        
+        # 获取原始图像尺寸
+        orig_width = pixmap.width()
+        orig_height = pixmap.height()
+        
+        # 获取显示区域尺寸
+        display_size = self.image_label.size()
+        max_width = display_size.width() - 20  # 留一些边距
+        max_height = display_size.height() - 60  # 留出控制栏空间
+        
+        # 计算合适的缩放比例
+        scale_x = max_width / orig_width
+        scale_y = max_height / orig_height
+        scale = min(scale_x, scale_y, 1.0)  # 不放大，只缩小
+        
+        target_width = int(orig_width * scale)
+        target_height = int(orig_height * scale)
+        
+        # 使用高质量缩放算法
         scaled = pixmap.scaled(
-            self.image_label.size(),
+            target_width, 
+            target_height,
             Qt.KeepAspectRatio,
-            Qt.FastTransformation
+            Qt.SmoothTransformation
         )
         self.image_label.setPixmap(scaled)
     

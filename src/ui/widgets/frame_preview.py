@@ -74,14 +74,26 @@ class FrameZoomDialog(QDialog):
         
         pixmap = numpy_to_qpixmap(display_image)
         
-        # 适应窗口大小
-        max_size = min(self.width() - 40, self.height() - 100)
-        if max_size < 400:
-            max_size = 500
+        # 获取原始图像尺寸
+        orig_width = pixmap.width()
+        orig_height = pixmap.height()
         
+        # 计算适合的显示尺寸
+        max_width = self.width() - 40
+        max_height = self.height() - 100
+        
+        # 计算缩放比例
+        scale_x = max_width / orig_width
+        scale_y = max_height / orig_height
+        scale = min(scale_x, scale_y, 1.0)  # 不放大，只缩小
+        
+        target_width = int(orig_width * scale)
+        target_height = int(orig_height * scale)
+        
+        # 使用高质量缩放
         scaled = pixmap.scaled(
-            max_size, max_size,
-            Qt.KeepAspectRatio, Qt.FastTransformation
+            target_width, target_height,
+            Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
         self.image_label.setPixmap(scaled)
     
@@ -158,11 +170,11 @@ class FrameThumbnail(QFrame):
         if len(self._image.shape) == 3 and self._image.shape[2] == 4:
             display_image = composite_on_checkerboard(self._image)
         
-        # 转换为 pixmap 并缩放
+        # 转换为 pixmap 并使用高质量缩放
         pixmap = numpy_to_qpixmap(display_image)
         self._display_pixmap = pixmap.scaled(
             self.thumbnail_size, self.thumbnail_size,
-            Qt.KeepAspectRatio, Qt.FastTransformation
+            Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
         self.image_label.setPixmap(self._display_pixmap)
     

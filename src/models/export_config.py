@@ -10,6 +10,7 @@ class ExportFormat(str, Enum):
     SPRITE_SHEET = "sprite_sheet"  # PNG精灵图 + JSON
     GIF = "gif"                    # GIF动画
     FRAMES = "frames"              # 单独的帧图片
+    WEBP = "webp"                  # WebP格式
     GODOT = "godot"                # Godot SpriteFrames (.tres)
 
 
@@ -67,6 +68,14 @@ class GodotConfig(BaseModel):
     resample_filter: ResampleFilter = Field(default=ResampleFilter.LANCZOS, description="缩放算法")
 
 
+class WebPConfig(BaseModel):
+    """WebP导出配置"""
+    quality: int = Field(default=80, ge=1, le=100, description="质量(1-100)")
+    frame_width: Optional[int] = Field(default=None, description="帧宽度")
+    frame_height: Optional[int] = Field(default=None, description="帧高度")
+    resample_filter: ResampleFilter = Field(default=ResampleFilter.LANCZOS, description="缩放算法")
+
+
 class PngQuantConfig(BaseModel):
     """PNG压缩配置"""
     enabled: bool = Field(default=False, description="是否启用压缩")
@@ -104,6 +113,12 @@ class ExportConfig(BaseModel):
         description="Godot配置"
     )
     
+    # WebP配置
+    webp_config: WebPConfig = Field(
+        default_factory=WebPConfig,
+        description="WebP配置"
+    )
+    
     # 选中的帧索引
     frame_indices: List[int] = Field(default_factory=list, description="要导出的帧索引")
     
@@ -116,6 +131,8 @@ class ExportConfig(BaseModel):
             return self.output_path / f"{self.output_name}.gif"
         elif self.format == ExportFormat.GODOT:
             return self.output_path / f"{self.output_name}.tres"
+        elif self.format == ExportFormat.WEBP:
+            return self.output_path / f"{self.output_name}.webp"
         else:
             return self.output_path / f"{self.output_name}.png"
     

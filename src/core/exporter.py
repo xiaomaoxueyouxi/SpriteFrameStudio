@@ -53,6 +53,8 @@ class Exporter:
             return (str(gif_path), None)
         elif config.format == ExportFormat.GODOT:
             return self.export_godot(frames, config)
+        elif config.format == ExportFormat.WEBP:
+            return self.export_webp(frames, config)
         elif config.format == ExportFormat.SPRITE_SHEET:
             return self.export_sprite_sheet(frames, config)
         else:
@@ -294,6 +296,42 @@ class Exporter:
                 compress_info = f"压缩: {format_file_size(total_original)} -> {format_file_size(total_compressed)} (节省 {ratio:.1f}%)"
         
         return (str(output_dir), compress_info)
+
+    def export_webp(
+        self,
+        frames: List[FrameData],
+        config: ExportConfig
+    ) -> Tuple[str, Optional[str]]:
+        """导出WebP格式"""
+        if not frames:
+            raise ValueError("没有要导出的帧")
+        
+        webp_config = config.webp_config
+        output_path = config.output_path or Path(".")
+        output_path.mkdir(parents=True, exist_ok=True)
+        
+        exported_files = []
+        
+        for i, frame in enumerate(frames):
+            img = frame.display_image
+            if img is not None:
+                pil_img = Image.fromarray(img)
+                
+                # 调整尺寸
+                if webp_config.frame_width and webp_config.frame_height:
+                    resample_filter = get_pil_resample_filter(webp_config.resample_filter)
+                    pil_img = pil_img.resize(
+                        (webp_config.frame_width, webp_config.frame_height),
+                        resample_filter
+                    )
+                
+                # 保存WebP文件
+                filename = f"{config.output_name}_{i:04d}.webp"
+                file_path = output_path / filename
+                pil_img.save(str(file_path), format='WebP', quality=webp_config.quality)
+                exported_files.append(file_path)
+        
+        return (str(output_path), f"导出 {len(exported_files)} 个WebP文件")
 
     def export_godot(
         self,
