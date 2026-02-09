@@ -20,12 +20,14 @@ from src.ui.widgets.frame_timeline import FrameTimeline
 from src.ui.widgets.pose_viewer import PoseViewer
 from src.ui.widgets.export_dialog import ExportDialog
 from src.ui.widgets.animation_preview import AnimationPreview
+from src.ui.widgets.history_panel import HistoryPanel
 
 from src.core.video_processor import VideoProcessor
 from src.core.frame_manager import FrameManager
 from src.core.background_remover import BackgroundRemover, BackgroundMode
 from src.core.pose_detector import PoseDetector
 from src.core.exporter import Exporter
+from src.core.history_manager import HistoryManager
 
 from src.workers.extraction_worker import ExtractionWorker
 from src.workers.background_worker import BackgroundWorker
@@ -98,6 +100,7 @@ class MainWindow(QMainWindow):
         self._background_remover = BackgroundRemover()
         self._pose_detector = PoseDetector()
         self._exporter = Exporter()
+        self._history_manager = HistoryManager()
         
         # 工作线程
         self._extraction_worker: Optional[ExtractionWorker] = None
@@ -924,8 +927,14 @@ class MainWindow(QMainWindow):
         anim_layout = QVBoxLayout(anim_tab)
         self.animation_preview = AnimationPreview()
         anim_layout.addWidget(self.animation_preview)
-        
         self.tab_widget.addTab(anim_tab, "动画预览")
+        
+        # 历史记录Tab
+        history_tab = QWidget()
+        history_layout = QVBoxLayout(history_tab)
+        self.history_panel = HistoryPanel()
+        history_layout.addWidget(self.history_panel)
+        self.tab_widget.addTab(history_tab, "历史记录")
         
         return panel
     
@@ -985,8 +994,30 @@ class MainWindow(QMainWindow):
         
         # Tab切换
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
+        
+        # 历史记录回退
+        self.history_panel.revert_requested.connect(self._on_history_revert)
     
     # ============ 槽函数 ============
+    
+    @Slot(int)
+    def _on_history_revert(self, step_id: int):
+        """历史记录回退"""
+        affected = self._history_manager.revert_to(step_id, self._frame_manager)
+
+        # 刷新受影响帧的预览
+        for idx in affected:
+            frame = self._frame_manager.get_frame(idx)
+            if frame and frame.display_image is not None:
+                self.frame_preview.update_frame(idx, frame.display_image)
+
+        # 刷新动画预览
+        self._update_animation_preview()
+
+        # 刷新历史面板
+        self.history_panel.refresh(self._history_manager.get_entries(), self._history_manager.get_memory_usage())
+
+        self.status_label.setText(f"已回退到步骤 #{step_id}")
     
     @Slot()
     def open_video(self):
@@ -1193,6 +1224,19 @@ class MainWindow(QMainWindow):
         self._background_worker.finished.connect(self._on_bg_finished)
         self._background_worker.error.connect(self._on_bg_error)
         
+        # 创建快照
+        if mode == BackgroundMode.AI:
+            description = f"AI抠图 {ai_params['model']} | {len(selected_indices)}帧"
+        else:
+            description = f"颜色过滤 {color_params['color']} | {len(selected_indices)}帧"
+        
+        self._history_manager.push_snapshot(
+            "背景处理",
+            description,
+            selected_indices,
+            self._frame_manager
+        )
+        
         # 开始处理
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
@@ -1359,6 +1403,14 @@ class MainWindow(QMainWindow):
             self.outline_color.blue()
         )
         
+        # 创建快照
+        self._history_manager.push_snapshot(
+            "描边",
+            f"描边 {thickness}px RGB{color} | {len(selected_indices)}帧",
+            selected_indices,
+            self._frame_manager
+        )
+        
         self.status_label.setText(f"正在添加描边... 0/{len(selected_indices)}")
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
@@ -1399,6 +1451,9 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.add_outline_btn.setEnabled(True)
         self.status_label.setText(f"描边完成：{processed_count} 帧")
+        
+        # 刷新历史面板
+        self.history_panel.refresh(self._history_manager.get_entries(), self._history_manager.get_memory_usage())
         
         if processed_count < len(selected_indices):
             skipped = len(selected_indices) - processed_count
@@ -1448,6 +1503,14 @@ class MainWindow(QMainWindow):
         if not frames:
             QMessageBox.information(self, "提示", "所选帧没有可用的图像数据")
             return
+        
+        # 创建快照
+        self._history_manager.push_snapshot(
+            "图像增强",
+            f"Real-ESRGAN {model_name} tile={tile} | {len(frames)}帧",
+            [idx for idx, _ in frames],
+            self._frame_manager
+        )
         
         # 断开旧的信号连接（如果存在）
         if hasattr(self, 'enhance_worker') and self.enhance_worker:
@@ -1519,6 +1582,9 @@ class MainWindow(QMainWindow):
         selected_count = len(self.frame_preview.get_selected_indices())
         self.status_label.setText(f"增强完成：{selected_count} 帧")
         
+        # 刷新历史面板
+        self.history_panel.refresh(self._history_manager.get_entries(), self._history_manager.get_memory_usage())
+        
         QMessageBox.information(
             self, "增强完成",
             f"已成功增强 {selected_count} 帧"
@@ -1546,6 +1612,14 @@ class MainWindow(QMainWindow):
         if edge_erode <= 0:
             QMessageBox.information(self, "提示", "边缘收缩必须大于0")
             return
+        
+        # 创建快照
+        self._history_manager.push_snapshot(
+            "边缘优化",
+            f"边缘收缩 {edge_erode}px | {len(selected_indices)}帧",
+            selected_indices,
+            self._frame_manager
+        )
         
         self.status_label.setText(f"正在优化边缘... 0/{len(selected_indices)}")
         self.progress_bar.setVisible(True)
@@ -1595,6 +1669,9 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.edge_optimize_btn.setEnabled(True)
         self.status_label.setText(f"边缘优化完成：{processed_count} 帧")
+        
+        # 刷新历史面板
+        self.history_panel.refresh(self._history_manager.get_entries(), self._history_manager.get_memory_usage())
         
         if processed_count < len(selected_indices):
             skipped = len(selected_indices) - processed_count
@@ -1675,6 +1752,14 @@ class MainWindow(QMainWindow):
         crop_width = max_x - min_x + 1
         crop_height = max_y - min_y + 1
         
+        # 创建快照
+        self._history_manager.push_snapshot(
+            "空白裁剪",
+            f"裁剪 {img_width}x{img_height}→{crop_width}x{crop_height} 边距({margin_top},{margin_bottom},{margin_left},{margin_right}) | {len(selected_indices)}帧",
+            selected_indices,
+            self._frame_manager
+        )
+        
         # 第二步：应用裁剪到所有选中的帧
         self.status_label.setText(f"正在裁剪 {len(selected_indices)} 帧...")
         QApplication.processEvents()
@@ -1697,6 +1782,10 @@ class MainWindow(QMainWindow):
         self._update_animation_preview()
         
         self.status_label.setText(f"裁剪完成：{cropped_count} 帧 ({crop_width}x{crop_height})")
+        
+        # 刷新历史面板
+        self.history_panel.refresh(self._history_manager.get_entries(), self._history_manager.get_memory_usage())
+        
         QMessageBox.information(
             self, "裁剪完成",
             f"已裁剪 {cropped_count} 帧\n"
@@ -1820,6 +1909,9 @@ class MainWindow(QMainWindow):
         self.remove_bg_btn.setEnabled(True)
         self.edge_optimize_btn.setEnabled(True)  # 抠图完成后启用边缘优化
         self.status_label.setText("背景去除完成")
+        
+        # 刷新历史面板
+        self.history_panel.refresh(self._history_manager.get_entries(), self._history_manager.get_memory_usage())
     
     def _on_bg_error(self, error: str):
         self.progress_bar.setVisible(False)
@@ -2076,6 +2168,14 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.Yes:
             return
         
+        # 创建快照
+        self._history_manager.push_snapshot(
+            "批量缩放",
+            f"{len(selected_indices)}帧 {orig_w}x{orig_h}→{target_w}x{target_h} {self.scale_algorithm_combo.currentText()}",
+            selected_indices,
+            self._frame_manager
+        )
+        
         # 开始缩放
         self.status_label.setText(f"正在缩放 {len(selected_indices)} 帧...")
         self.progress_bar.setVisible(True)
@@ -2113,6 +2213,10 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.scale_frames_btn.setEnabled(True)
         self.status_label.setText(f"缩放完成：{scaled_count} 帧 ({orig_w}x{orig_h} → {target_w}x{target_h})")
+        
+        # 刷新历史面板
+        self.history_panel.refresh(self._history_manager.get_entries(), self._history_manager.get_memory_usage())
+        
         QMessageBox.information(
             self, "缩放完成",
             f"已缩放 {scaled_count} 帧\n"

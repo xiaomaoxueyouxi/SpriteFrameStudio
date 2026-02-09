@@ -108,3 +108,6 @@ spriteframe_env*
 spriteframe.zip
 portable_output/
 .trae/
+
+# Windows device files
+nul
