@@ -67,9 +67,11 @@ class BackgroundWorker(QThread):
                 self.frame_processed.emit(frame_index, result_copy)
                 
                 # 更新进度
-                progress = (i + 1) / total * 100
-                self.progress.emit(i + 1, total, progress)
-                self.status_changed.emit(f"正在去除背景... {i + 1}/{total}")
+                current = i + 1
+                progress = current / total * 100
+                print(f"[DEBUG] 背景处理进度: {current}/{total} = {progress:.1f}%")  # 调试信息
+                self.progress.emit(current, total, progress)
+                self.status_changed.emit(f"正在去除背景... {current}/{total}")
             
             self.finished.emit()
         except Exception as e:
