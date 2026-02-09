@@ -1914,6 +1914,9 @@ class MainWindow(QMainWindow):
         self.edge_optimize_btn.setEnabled(True)  # 抠图完成后启用边缘优化
         self.status_label.setText("背景去除完成")
         
+        # 更新动画预览（重要：立即刷新显示效果）
+        self._update_animation_preview()
+        
         # 刷新历史面板
         self.history_panel.refresh(self._history_manager.get_entries(), self._history_manager.get_memory_usage())
     
