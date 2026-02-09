@@ -1896,7 +1896,11 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "错误", f"帧提取失败: {error}")
     
     def _on_bg_progress(self, current: int, total: int, percent: float):
-        self.progress_bar.setValue(int(percent))
+        # 确保进度值在合理范围内
+        progress_value = max(0, min(100, int(percent)))
+        self.progress_bar.setValue(progress_value)
+        # 更新状态栏显示具体进度
+        self.status_label.setText(f"正在去除背景... {current}/{total} ({progress_value}%)")
     
     def _on_bg_status(self, status: str):
         self.status_label.setText(status)
