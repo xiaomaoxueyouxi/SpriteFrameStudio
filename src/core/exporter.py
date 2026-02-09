@@ -12,6 +12,7 @@ from src.models.export_config import (
     SpriteSheetMeta, FrameRect, ResampleFilter
 )
 from src.utils.pngquant import compress_png, format_file_size
+from src.core.sprite_webp_exporter import export_sprite_sheet_as_webp
 
 
 def get_pil_resample_filter(filter_type: ResampleFilter):
@@ -54,7 +55,11 @@ class Exporter:
         elif config.format == ExportFormat.GODOT:
             return self.export_godot(frames, config)
         elif config.format == ExportFormat.WEBP:
-            return self.export_webp(frames, config)
+            # WebP格式：根据配置决定导出类型
+            if hasattr(config, 'sprite_config') and config.sprite_config:
+                return export_sprite_sheet_as_webp(frames, config)
+            else:
+                return self.export_webp(frames, config)
         elif config.format == ExportFormat.SPRITE_SHEET:
             return self.export_sprite_sheet(frames, config)
         else:

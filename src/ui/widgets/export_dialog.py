@@ -762,19 +762,25 @@ class ExportDialog(QDialog):
         """获取导出配置"""
         config = ExportConfig()
         
-        # 格式
-        if self.tab_widget.currentIndex() == 0:
-            config.format = ExportFormat.SPRITE_SHEET
-        elif self.tab_widget.currentIndex() == 1:
-            config.format = ExportFormat.GIF
-        elif self.tab_widget.currentIndex() == 2:
-            config.format = ExportFormat.FRAMES
-        # elif self.tab_widget.currentIndex() == 3:
-        #     config.format = ExportFormat.GODOT
+        # 根据选项卡和格式选项组合确定最终导出格式
+        current_tab = self.tab_widget.currentIndex()
         
-        # 根据格式选项设置实际导出格式
         if self.webp_radio.isChecked():
-            config.format = ExportFormat.WEBP
+            # WebP格式：保持当前选项卡的导出类型，只是改变编码格式
+            if current_tab == 0:
+                config.format = ExportFormat.SPRITE_SHEET  # 精灵图WebP
+            elif current_tab == 1:
+                config.format = ExportFormat.GIF  # GIF WebP
+            elif current_tab == 2:
+                config.format = ExportFormat.FRAMES  # 单帧WebP
+        else:
+            # 原始格式或其他格式
+            if current_tab == 0:
+                config.format = ExportFormat.SPRITE_SHEET
+            elif current_tab == 1:
+                config.format = ExportFormat.GIF
+            elif current_tab == 2:
+                config.format = ExportFormat.FRAMES
         
         # 输出路径
         config.output_name = self.name_edit.text() or "default"

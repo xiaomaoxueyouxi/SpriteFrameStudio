@@ -135,6 +135,12 @@ class AnimationPreview(QWidget):
         
         self._update_display()
         self._update_labels()
+        
+        # 确保速度滑块显示正确的值
+        self.speed_slider.blockSignals(True)
+        self.speed_slider.setValue(int(self._fps))
+        self.speed_slider.blockSignals(False)
+        self.speed_label.setText(f"{int(self._fps)} fps")
     
     def _cache_all_pixmaps(self):
         """缓存所有帧的 pixmap（保留透明通道）"""
@@ -181,19 +187,14 @@ class AnimationPreview(QWidget):
             self.play()
     
     def play(self):
-        """播放"""
+        """播放 - 使用用户设置的速度"""
         if not self._frames:
             return
         self._is_playing = True
         self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
         
-        if self._timestamps and len(self._timestamps) > 1:
-            total_duration = self._timestamps[-1] - self._timestamps[0]
-            avg_fps = (len(self._frames) - 1) / total_duration if total_duration > 0 else self._fps
-            interval = int(1000 / avg_fps)
-        else:
-            interval = int(1000 / self._fps)
-        
+        # 总是使用用户设置的 fps，忽略时间戳计算
+        interval = int(1000 / self._fps)
         self._timer.start(interval)
     
     def pause(self):
@@ -235,8 +236,9 @@ class AnimationPreview(QWidget):
         self.speed_label.setText(f"{value} fps")
         
         if self._is_playing:
-            interval = int(1000 / self._fps)
-            self._timer.setInterval(interval)
+            # 重启播放以应用新的速度
+            self.stop()
+            self.play()
     
     def _on_bg_changed(self, index):
         """背景模式改变"""
