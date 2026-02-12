@@ -1065,6 +1065,10 @@ class MainWindow(QMainWindow):
             # 启用功能
             self.extract_btn.setEnabled(True)
             
+            # 根据视频帧率自动设置抽帧帧数（保持与视频原始帧率一致）
+            video_fps = self._video_info.fps
+            self.fps_spin.setValue(video_fps)
+            
             # 清空旧数据，重置所有状态
             self._frame_manager.clear()
             self.frame_preview.clear()
