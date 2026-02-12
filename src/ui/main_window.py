@@ -2543,8 +2543,12 @@ class MainWindow(QMainWindow):
         """选择变化"""
         # 同步到frame_manager
         self._frame_manager.deselect_all()
-        for idx in selected_indices:
-            self._frame_manager.select_frame(idx, True)
+        
+        # 遍历所有帧，根据原始帧号设置选中状态
+        for i, frame in enumerate(self._frame_manager.frames):
+            if frame.index in selected_indices:
+                self._frame_manager.select_frame(i, True)
+        
         # 更新状态栏显示
         self._update_frame_count()
         
@@ -2595,16 +2599,19 @@ class MainWindow(QMainWindow):
             self.animation_preview.set_frames([])
             return
         
-        # 获取图像和时间戳
+        # 获取选中的帧数据（直接使用selected_frames属性，避免索引混淆）
+        selected_frames = self._frame_manager.selected_frames
+        
+        # 按时间戳排序以确保正确的播放顺序
+        sorted_frames = sorted(selected_frames, key=lambda f: f.timestamp)
+        
+        # 提取图像和时间戳
         images = []
         timestamps = []
-        for idx in selected_indices:
-            frame = self._frame_manager.get_frame(idx)
-            if frame:
-                img = frame.display_image
-                if img is not None:
-                    images.append(img)
-                    timestamps.append(frame.timestamp)
+        for frame in sorted_frames:
+            if frame.display_image is not None:
+                images.append(frame.display_image)
+                timestamps.append(frame.timestamp)
         
         print(f"[DEBUG] 实际加载 {len(images)} 帧到动画预览")  # 调试信息
         
