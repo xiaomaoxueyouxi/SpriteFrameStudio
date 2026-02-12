@@ -3,19 +3,22 @@ from typing import Optional, List
 from PySide6.QtWidgets import (
     QWidget, QScrollArea, QGridLayout, QLabel, 
     QVBoxLayout, QHBoxLayout, QCheckBox, QFrame, QSizePolicy,
-    QPushButton, QDialog, QSpinBox
+    QPushButton, QDialog, QSpinBox, QSlider, QButtonGroup, QRadioButton,
+    QMessageBox
 )
-from PySide6.QtCore import Qt, Signal, QSize, QEvent
-from PySide6.QtGui import QPixmap, QImage, QPainter, QColor
+from PySide6.QtCore import Qt, Signal, QSize, QEvent, QPoint
+from PySide6.QtGui import QPixmap, QImage, QPainter, QColor, QMouseEvent, QKeyEvent, QCursor
 import numpy as np
 
-from src.utils.image_utils import numpy_to_qpixmap, composite_on_checkerboard
+from src.utils.image_utils import numpy_to_qpixmap, composite_on_checkerboard, blend_with_overlay
+from src.core.frame_editor import FrameEditor, EditTool
 
 
 class FrameZoomDialog(QDialog):
-    """帧放大预览对话框 - 支持左右切换和缩放"""
+    """帧放大预览对话框 - 支持左右切换、缩放和精修"""
     
     export_requested = Signal(int)  # frame_index
+    image_edited = Signal(int, np.ndarray)  # frame_index, edited_image
     
     def __init__(self, images: List[np.ndarray], frame_indices: List[int], current_index: int = 0, parent=None):
         super().__init__(parent)
@@ -26,6 +29,14 @@ class FrameZoomDialog(QDialog):
         self.max_zoom = 5.0     # 最大缩放
         self.min_zoom = 0.1     # 最小缩放
         self.bg_mode = "gray"   # 背景模式: gray, white, black
+        
+        # 精修模式
+        self.edit_mode = False
+        self.frame_editor: Optional[FrameEditor] = None
+        self.current_tool = EditTool.MOVE
+        self.is_dragging = False
+        self.is_panning = False  # 移动工具拖动状态
+        self.last_pan_pos = None  # 上次拖动位置
         
         self.setWindowTitle(f"帧 #{self.frame_indices[self.current_index]} - 放大预览")
         self.setMinimumSize(800, 600)
@@ -103,7 +114,144 @@ class FrameZoomDialog(QDialog):
         toolbar.addLayout(bg_layout)
         
         toolbar.addLayout(zoom_layout)
+        
+        # 精修工具按钮
+        self.edit_btn = QPushButton("🔧 精修")
+        self.edit_btn.setCheckable(True)
+        self.edit_btn.clicked.connect(self._toggle_edit_mode)
+        toolbar.addWidget(self.edit_btn)
+        
         layout.addLayout(toolbar)
+
+        # 精修工具栏（默认隐藏）- 使用两行布局
+        self.edit_toolbar = QVBoxLayout()
+        self.edit_toolbar.setSpacing(8)
+        self.edit_toolbar.setContentsMargins(8, 8, 8, 8)
+
+        # 第一行：工具选择和参数
+        row1_layout = QHBoxLayout()
+
+        # 工具选择
+        tool_layout = QHBoxLayout()
+        tool_layout.addWidget(QLabel("工具:"))
+
+        self.tool_group = QButtonGroup(self)
+
+        self.move_radio = QRadioButton("移动")
+        self.move_radio.setChecked(True)
+        self.move_radio.clicked.connect(lambda: self._set_tool(EditTool.MOVE))
+        self.tool_group.addButton(self.move_radio)
+        tool_layout.addWidget(self.move_radio)
+
+        self.magic_wand_radio = QRadioButton("魔棒")
+        self.magic_wand_radio.clicked.connect(lambda: self._set_tool(EditTool.MAGIC_WAND))
+        self.tool_group.addButton(self.magic_wand_radio)
+        tool_layout.addWidget(self.magic_wand_radio)
+
+        self.eraser_radio = QRadioButton("橡皮")
+        self.eraser_radio.clicked.connect(lambda: self._set_tool(EditTool.ERASER))
+        self.tool_group.addButton(self.eraser_radio)
+        tool_layout.addWidget(self.eraser_radio)
+
+        row1_layout.addLayout(tool_layout)
+        row1_layout.addSpacing(30)
+
+        # 容差设置（魔棒工具）
+        self.tolerance_layout = QHBoxLayout()
+        self.tolerance_layout.addWidget(QLabel("容差:"))
+        self.tolerance_slider = QSlider(Qt.Horizontal)
+        self.tolerance_slider.setRange(0, 100)
+        self.tolerance_slider.setValue(30)
+        self.tolerance_slider.setFixedWidth(100)
+        self.tolerance_slider.valueChanged.connect(self._on_tolerance_changed)
+        self.tolerance_layout.addWidget(self.tolerance_slider)
+        self.tolerance_label = QLabel("30")
+        self.tolerance_label.setFixedWidth(30)
+        self.tolerance_layout.addWidget(self.tolerance_label)
+        row1_layout.addLayout(self.tolerance_layout)
+
+        row1_layout.addSpacing(20)
+
+        # 橡皮擦大小
+        self.eraser_layout = QHBoxLayout()
+        self.eraser_layout.addWidget(QLabel("大小:"))
+        self.eraser_slider = QSlider(Qt.Horizontal)
+        self.eraser_slider.setRange(1, 50)
+        self.eraser_slider.setValue(10)
+        self.eraser_slider.setFixedWidth(100)
+        self.eraser_slider.valueChanged.connect(self._on_eraser_size_changed)
+        self.eraser_layout.addWidget(self.eraser_slider)
+        self.eraser_size_label = QLabel("10")
+        self.eraser_size_label.setFixedWidth(30)
+        self.eraser_layout.addWidget(self.eraser_size_label)
+        row1_layout.addLayout(self.eraser_layout)
+        self.eraser_layout.setEnabled(False)
+
+        row1_layout.addStretch()
+        self.edit_toolbar.addLayout(row1_layout)
+
+        # 第二行：操作按钮
+        row2_layout = QHBoxLayout()
+
+        # 选区操作按钮组
+        self.select_all_btn = QPushButton("全选")
+        self.select_all_btn.setFixedWidth(60)
+        self.select_all_btn.clicked.connect(self._select_all)
+        row2_layout.addWidget(self.select_all_btn)
+
+        self.invert_btn = QPushButton("反选")
+        self.invert_btn.setFixedWidth(60)
+        self.invert_btn.clicked.connect(self._invert_selection)
+        row2_layout.addWidget(self.invert_btn)
+
+        self.clear_sel_btn = QPushButton("清除选区")
+        self.clear_sel_btn.setFixedWidth(80)
+        self.clear_sel_btn.clicked.connect(self._clear_selection)
+        row2_layout.addWidget(self.clear_sel_btn)
+
+        row2_layout.addSpacing(20)
+
+        self.delete_btn = QPushButton("🗑️ 删除")
+        self.delete_btn.setFixedWidth(80)
+        self.delete_btn.setStyleSheet("background-color: #ff4444; color: white;")
+        self.delete_btn.clicked.connect(self._delete_selection)
+        row2_layout.addWidget(self.delete_btn)
+
+        row2_layout.addSpacing(30)
+
+        # 撤销重做
+        self.undo_btn = QPushButton("↩️ 撤销")
+        self.undo_btn.setFixedWidth(70)
+        self.undo_btn.clicked.connect(self._undo)
+        row2_layout.addWidget(self.undo_btn)
+
+        self.redo_btn = QPushButton("↪️ 重做")
+        self.redo_btn.setFixedWidth(70)
+        self.redo_btn.clicked.connect(self._redo)
+        row2_layout.addWidget(self.redo_btn)
+
+        row2_layout.addStretch()
+
+        # 完成和取消
+        self.commit_btn = QPushButton("✓ 完成")
+        self.commit_btn.setFixedWidth(70)
+        self.commit_btn.setStyleSheet("background-color: #44ff44; color: black;")
+        self.commit_btn.clicked.connect(self._commit_edit)
+        row2_layout.addWidget(self.commit_btn)
+
+        self.cancel_edit_btn = QPushButton("✗ 取消")
+        self.cancel_edit_btn.setFixedWidth(70)
+        self.cancel_edit_btn.clicked.connect(self._cancel_edit)
+        row2_layout.addWidget(self.cancel_edit_btn)
+
+        self.edit_toolbar.addLayout(row2_layout)
+
+        # 将精修工具栏放入widget以便控制显示
+        self.edit_toolbar_widget = QWidget()
+        self.edit_toolbar_widget.setLayout(self.edit_toolbar)
+        self.edit_toolbar_widget.setStyleSheet("background-color: #2d2d2d; border-radius: 4px;")
+        self.edit_toolbar_widget.setVisible(False)
+        layout.addWidget(self.edit_toolbar_widget)
         
         # 图像显示区域（可滚动）
         from PySide6.QtWidgets import QScrollArea
@@ -122,17 +270,10 @@ class FrameZoomDialog(QDialog):
         bottom_layout = QHBoxLayout()
         
         # 信息
-        h, w = self.images[self.current_index].shape[:2]
-        channels = self.images[self.current_index].shape[2] if len(self.images[self.current_index].shape) == 3 else 1
-        info = f"尺寸: {w}x{h} | 通道: {channels}"
-        if channels == 4:
-            alpha = self.images[self.current_index][:, :, 3]
-            transparent = np.sum(alpha < 128) / alpha.size * 100
-            info += f" | 透明: {transparent:.1f}%"
-        
-        info_label = QLabel(info)
-        info_label.setStyleSheet("color: #888;")
-        bottom_layout.addWidget(info_label)
+        self.info_label = QLabel("")
+        self.info_label.setStyleSheet("color: #888;")
+        bottom_layout.addWidget(self.info_label)
+        self._update_info_label()
         
         bottom_layout.addStretch()
         
@@ -143,16 +284,374 @@ class FrameZoomDialog(QDialog):
         
         # 关闭按钮
         close_btn = QPushButton("关闭")
-        close_btn.clicked.connect(self.accept)
+        close_btn.clicked.connect(self._on_close)
         bottom_layout.addWidget(close_btn)
         
         layout.addLayout(bottom_layout)
         
         self._display_image()
+        
+        # 安装事件过滤器以捕获鼠标事件
+        self.image_label.installEventFilter(self)
+        self.setFocusPolicy(Qt.StrongFocus)
     
+    def _toggle_edit_mode(self):
+        """切换精修模式"""
+        self.edit_mode = self.edit_btn.isChecked()
+        self.edit_toolbar_widget.setVisible(self.edit_mode)
+        
+        if self.edit_mode:
+            # 进入精修模式，初始化编辑器
+            current_image = self.images[self.current_index]
+            self.frame_editor = FrameEditor(current_image)
+            self._set_tool(EditTool.MOVE)
+            self._update_edit_buttons()
+        else:
+            # 退出精修模式
+            self.frame_editor = None
+        
+        self._display_image()
+    
+    def _set_tool(self, tool: EditTool):
+        """设置当前工具"""
+        self.current_tool = tool
+
+        if self.frame_editor:
+            self.frame_editor.current_tool = tool
+
+        # 更新UI
+        self.move_radio.setChecked(tool == EditTool.MOVE)
+        self.magic_wand_radio.setChecked(tool == EditTool.MAGIC_WAND)
+        self.eraser_radio.setChecked(tool == EditTool.ERASER)
+
+        # 启用/禁用相应的设置
+        self.tolerance_layout.setEnabled(tool == EditTool.MAGIC_WAND)
+        self.eraser_layout.setEnabled(tool == EditTool.ERASER)
+
+        # 更新鼠标样式
+        self._update_cursor()
+
+    def _update_cursor(self):
+        """根据当前工具更新鼠标样式"""
+        if not self.edit_mode:
+            self.image_label.setCursor(QCursor(Qt.ArrowCursor))
+            return
+
+        if self.current_tool == EditTool.MOVE:
+            self.image_label.setCursor(QCursor(Qt.OpenHandCursor))
+        elif self.current_tool == EditTool.MAGIC_WAND:
+            self.image_label.setCursor(QCursor(Qt.CrossCursor))
+        elif self.current_tool == EditTool.ERASER:
+            self.image_label.setCursor(QCursor(Qt.PointingHandCursor))
+        else:
+            self.image_label.setCursor(QCursor(Qt.ArrowCursor))
+
+    def _on_tolerance_changed(self, value):
+        """容差滑块变化"""
+        self.tolerance_label.setText(str(value))
+        if self.frame_editor:
+            self.frame_editor.tolerance = value
+    
+    def _on_eraser_size_changed(self, value):
+        """橡皮擦大小变化"""
+        self.eraser_size_label.setText(str(value))
+        if self.frame_editor:
+            self.frame_editor.brush_size = value
+    
+    def _select_all(self):
+        """全选"""
+        if self.frame_editor:
+            self.frame_editor.select_all()
+            self._display_image()
+    
+    def _invert_selection(self):
+        """反选"""
+        if self.frame_editor:
+            self.frame_editor.invert_selection()
+            self._display_image()
+    
+    def _clear_selection(self):
+        """清除选区"""
+        if self.frame_editor:
+            self.frame_editor.clear_selection()
+            self._display_image()
+    
+    def _delete_selection(self):
+        """删除选区"""
+        if self.frame_editor:
+            self.frame_editor.delete_selection()
+            self._update_edit_buttons()
+            self._display_image()
+    
+    def _undo(self):
+        """撤销"""
+        if self.frame_editor:
+            self.frame_editor.undo()
+            self._update_edit_buttons()
+            self._display_image()
+    
+    def _redo(self):
+        """重做"""
+        if self.frame_editor:
+            self.frame_editor.redo()
+            self._update_edit_buttons()
+            self._display_image()
+    
+    def _update_edit_buttons(self):
+        """更新编辑按钮状态"""
+        if self.frame_editor:
+            self.undo_btn.setEnabled(self.frame_editor.can_undo())
+            self.redo_btn.setEnabled(self.frame_editor.can_redo())
+    
+    def _commit_edit(self):
+        """完成编辑"""
+        if self.frame_editor:
+            edited_image = self.frame_editor.commit()
+            self.images[self.current_index] = edited_image
+            self.image_edited.emit(self.frame_indices[self.current_index], edited_image)
+        
+        self.edit_btn.setChecked(False)
+        self._toggle_edit_mode()
+    
+    def _cancel_edit(self):
+        """取消编辑"""
+        self.edit_btn.setChecked(False)
+        self._toggle_edit_mode()
+    
+    def _on_close(self):
+        """关闭对话框"""
+        if self.edit_mode:
+            reply = QMessageBox.question(
+                self, "确认关闭",
+                "正在精修模式中，是否保存更改？",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel
+            )
+            
+            if reply == QMessageBox.Save:
+                self._commit_edit()
+                self.accept()
+            elif reply == QMessageBox.Discard:
+                self._cancel_edit()
+                self.accept()
+            # Cancel则不关闭
+        else:
+            self.accept()
+    
+    def eventFilter(self, obj, event):
+        """事件过滤器 - 处理鼠标事件"""
+        if obj == self.image_label and self.edit_mode and self.frame_editor:
+            if event.type() == QEvent.MouseButtonPress:
+                self._handle_mouse_press(event)
+                return True
+            elif event.type() == QEvent.MouseMove:
+                self._handle_mouse_move(event)
+                return True
+            elif event.type() == QEvent.MouseButtonRelease:
+                self._handle_mouse_release(event)
+                return True
+        
+        return super().eventFilter(obj, event)
+    
+    def keyPressEvent(self, event: QKeyEvent):
+        """键盘事件处理"""
+        if self.edit_mode and self.frame_editor:
+            if event.key() == Qt.Key_Delete or event.key() == Qt.Key_Backspace:
+                self._delete_selection()
+            elif event.key() == Qt.Key_Z and event.modifiers() == Qt.ControlModifier:
+                self._undo()
+            elif event.key() == Qt.Key_Y and event.modifiers() == Qt.ControlModifier:
+                self._redo()
+            elif event.key() == Qt.Key_Escape:
+                self._clear_selection()
+            else:
+                super().keyPressEvent(event)
+        else:
+            super().keyPressEvent(event)
+    
+    def _get_image_coords(self, pos: QPoint) -> tuple:
+        """将鼠标坐标转换为图像坐标"""
+        if not self.image_label.pixmap():
+            return (-1, -1)
+        
+        pixmap = self.image_label.pixmap()
+        label_width = self.image_label.width()
+        label_height = self.image_label.height()
+        pixmap_width = pixmap.width()
+        pixmap_height = pixmap.height()
+        
+        # 计算居中偏移
+        offset_x = (label_width - pixmap_width) // 2
+        offset_y = (label_height - pixmap_height) // 2
+        
+        # 转换为图像坐标
+        x = pos.x() - offset_x
+        y = pos.y() - offset_y
+        
+        # 检查是否在图像范围内
+        if x < 0 or x >= pixmap_width or y < 0 or y >= pixmap_height:
+            return (-1, -1)
+        
+        # 考虑缩放因子，转换回原始图像坐标
+        original_x = int(x / self.zoom_factor)
+        original_y = int(y / self.zoom_factor)
+        
+        return (original_x, original_y)
+    
+    def _handle_mouse_press(self, event: QMouseEvent):
+        """处理鼠标按下事件"""
+        if not self.frame_editor:
+            return
+
+        if self.current_tool == EditTool.MOVE:
+            # 移动工具：开始拖动滚动
+            if event.button() == Qt.LeftButton:
+                self.is_panning = True
+                self.last_pan_pos = event.pos()
+                self.image_label.setCursor(QCursor(Qt.ClosedHandCursor))
+            return
+
+        x, y = self._get_image_coords(event.pos())
+        if x < 0 or y < 0:
+            return
+
+        if self.current_tool == EditTool.MAGIC_WAND:
+            if event.button() == Qt.LeftButton:
+                # 左键：添加到选区
+                if event.modifiers() == Qt.ShiftModifier:
+                    self.frame_editor.add_to_selection(x, y)
+                else:
+                    self.frame_editor.magic_wand_select(x, y)
+                self._display_image()
+            elif event.button() == Qt.RightButton:
+                # 右键：从选区减去
+                self.frame_editor.subtract_from_selection(x, y)
+                self._display_image()
+
+        elif self.current_tool == EditTool.ERASER:
+            if event.button() == Qt.LeftButton:
+                self.is_dragging = True
+                self.frame_editor.start_eraser_stroke()
+                self.frame_editor.erase_at(x, y)
+                self._display_image()
+
+    def _handle_mouse_move(self, event: QMouseEvent):
+        """处理鼠标移动事件"""
+        if not self.frame_editor:
+            return
+
+        if self.current_tool == EditTool.MOVE and self.is_panning:
+            # 移动工具：拖动滚动（不重新渲染图像，避免抖动）
+            if self.last_pan_pos:
+                delta = event.pos() - self.last_pan_pos
+                self.scroll_area.horizontalScrollBar().setValue(
+                    self.scroll_area.horizontalScrollBar().value() - delta.x()
+                )
+                self.scroll_area.verticalScrollBar().setValue(
+                    self.scroll_area.verticalScrollBar().value() - delta.y()
+                )
+                self.last_pan_pos = event.pos()
+            return
+
+        # 获取图像坐标（用于橡皮擦和显示预览）
+        x, y = self._get_image_coords(event.pos())
+
+        # 橡皮擦工具：显示大小预览
+        if self.current_tool == EditTool.ERASER:
+            self._update_eraser_preview(x, y)
+
+        if not self.is_dragging:
+            return
+
+        if x < 0 or y < 0:
+            return
+
+        if self.current_tool == EditTool.ERASER:
+            self.frame_editor.erase_at(x, y)
+            self._display_image()
+
+    def _handle_mouse_release(self, event: QMouseEvent):
+        """处理鼠标释放事件"""
+        if self.current_tool == EditTool.MOVE and self.is_panning:
+            # 移动工具：结束拖动
+            self.is_panning = False
+            self.last_pan_pos = None
+            self.image_label.setCursor(QCursor(Qt.OpenHandCursor))
+            return
+
+        if self.current_tool == EditTool.ERASER:
+            self.is_dragging = False
+            self._update_edit_buttons()
+            # 清除橡皮擦预览
+            self._clear_eraser_preview()
+
+    def _update_eraser_preview(self, x: int, y: int):
+        """更新橡皮擦大小预览"""
+        if not self.frame_editor or x < 0 or y < 0:
+            self._clear_eraser_preview()
+            return
+
+        # 获取当前显示的图像
+        if self.edit_mode and self.frame_editor:
+            current_image = self.frame_editor.get_display_image(show_selection=True)
+        else:
+            current_image = self.images[self.current_index]
+
+        # 根据背景模式处理
+        display_image = current_image.copy()
+        if len(current_image.shape) == 3 and current_image.shape[2] == 4:
+            if self.bg_mode == "gray":
+                display_image = composite_on_checkerboard(current_image, square_size=15)
+            else:
+                from PIL import Image
+                pil_img = Image.fromarray(current_image)
+                if self.bg_mode == "white":
+                    background = Image.new('RGBA', pil_img.size, (255, 255, 255, 255))
+                else:
+                    background = Image.new('RGBA', pil_img.size, (0, 0, 0, 255))
+                pil_img = Image.alpha_composite(background, pil_img)
+                display_image = np.array(pil_img)
+
+        # 在鼠标位置绘制橡皮擦范围圆圈
+        eraser_size = self.frame_editor.brush_size
+        scaled_eraser_size = int(eraser_size * self.zoom_factor)
+
+        # 转换图像坐标到显示坐标
+        display_x = int(x * self.zoom_factor)
+        display_y = int(y * self.zoom_factor)
+
+        # 绘制红色圆圈表示橡皮擦范围
+        from PIL import ImageDraw
+        pil_display = Image.fromarray(display_image)
+        draw = ImageDraw.Draw(pil_display)
+        draw.ellipse(
+            [display_x - scaled_eraser_size, display_y - scaled_eraser_size,
+             display_x + scaled_eraser_size, display_y + scaled_eraser_size],
+            outline=(255, 0, 0, 255),
+            width=2
+        )
+        display_image = np.array(pil_display)
+
+        # 显示图像
+        pixmap = numpy_to_qpixmap(display_image)
+        scaled_width = int(pixmap.width() * self.zoom_factor)
+        scaled_height = int(pixmap.height() * self.zoom_factor)
+        scaled = pixmap.scaled(
+            scaled_width, scaled_height,
+            Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+        self.image_label.setPixmap(scaled)
+
+    def _clear_eraser_preview(self):
+        """清除橡皮擦预览，恢复正常显示"""
+        self._display_image()
+
     def _display_image(self):
         """显示当前帧图像"""
-        current_image = self.images[self.current_index]
+        # 获取要显示的图像
+        if self.edit_mode and self.frame_editor:
+            current_image = self.frame_editor.get_display_image(show_selection=True)
+        else:
+            current_image = self.images[self.current_index]
         
         # 根据背景模式处理透明通道
         display_image = current_image
@@ -185,19 +684,45 @@ class FrameZoomDialog(QDialog):
         self.image_label.setPixmap(scaled)
         
         # 更新窗口标题和控件状态
-        self.setWindowTitle(f"帧 #{self.frame_indices[self.current_index]} - 放大预览")
+        title = f"帧 #{self.frame_indices[self.current_index]}"
+        if self.edit_mode:
+            title += " - 精修模式"
+        self.setWindowTitle(title)
         self.frame_counter.setText(f"{self.current_index + 1}/{len(self.images)}")
         self.zoom_label.setText(f"{int(self.zoom_factor * 100)}%")
         
         # 更新导航按钮状态
-        self.prev_btn.setEnabled(self.current_index > 0)
-        self.next_btn.setEnabled(self.current_index < len(self.images) - 1)
+        can_navigate = not self.edit_mode
+        self.prev_btn.setEnabled(can_navigate and self.current_index > 0)
+        self.next_btn.setEnabled(can_navigate and self.current_index < len(self.images) - 1)
         
         # 更新缩放按钮状态
         self.zoom_out_btn.setEnabled(self.zoom_factor > self.min_zoom)
         self.zoom_in_btn.setEnabled(self.zoom_factor < self.max_zoom)
         
         # 更新信息显示
+        self._update_info_label()
+    
+    def _update_info_label(self):
+        """更新底部信息标签"""
+        if self.edit_mode and self.frame_editor:
+            current_image = self.frame_editor.current_image
+        else:
+            current_image = self.images[self.current_index]
+        
+        h, w = current_image.shape[:2]
+        channels = current_image.shape[2] if len(current_image.shape) == 3 else 1
+        info = f"尺寸: {w}x{h} | 通道: {channels}"
+        if channels == 4:
+            alpha = current_image[:, :, 3]
+            transparent = np.sum(alpha < 128) / alpha.size * 100
+            info += f" | 透明: {transparent:.1f}%"
+        
+        if self.edit_mode and self.frame_editor:
+            has_selection = np.any(self.frame_editor.selection_mask > 0)
+            info += f" | 选区: {'有' if has_selection else '无'}"
+        
+        self.info_label.setText(info)
         self._update_info()
     
     def _prev_frame(self):
@@ -424,6 +949,7 @@ class FramePreview(QWidget):
     selection_changed = Signal(list)  # List[int] selected indices
     status_message = Signal(str)  # 状态消息
     export_single_frame = Signal(int)  # frame_index
+    frame_edited = Signal(int, np.ndarray)  # frame_index, edited_image
     
     def __init__(self, thumbnail_size: int = 120, columns: int = 4, parent=None):
         super().__init__(parent)
@@ -640,7 +1166,7 @@ class FramePreview(QWidget):
         self.frame_clicked.emit(frame_index)
     
     def _on_thumbnail_double_clicked(self, frame_index: int):
-        """双击帧放大预览 - 支持多帧浏览"""
+        """双击帧放大预览 - 支持多帧浏览和精修"""
         # 获取所有选中的帧（如果没有选中则使用当前帧）
         selected_indices = self.get_selected_indices()
         if not selected_indices:
@@ -669,7 +1195,16 @@ class FramePreview(QWidget):
             dialog = FrameZoomDialog(images, frame_indices, current_pos, parent=self)
             # 连接导出信号
             dialog.export_requested.connect(self.export_single_frame)
+            # 连接编辑信号
+            dialog.image_edited.connect(self._on_frame_edited)
             dialog.exec()
+    
+    def _on_frame_edited(self, frame_index: int, edited_image: np.ndarray):
+        """处理帧编辑完成事件"""
+        # 更新缩略图
+        self.update_frame(frame_index, edited_image)
+        # 发送信号通知主窗口保存编辑后的帧
+        self.frame_edited.emit(frame_index, edited_image)
     
     def _on_selection_changed(self, frame_index: int, is_selected: bool):
         """处理选中状态变化，记录最后一次选中的帧"""

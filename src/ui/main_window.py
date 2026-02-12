@@ -991,6 +991,7 @@ class MainWindow(QMainWindow):
         self.frame_preview.selection_changed.connect(self._on_selection_changed)
         self.frame_preview.status_message.connect(self.status_label.setText)
         self.frame_preview.export_single_frame.connect(self.export_single_frame)
+        self.frame_preview.frame_edited.connect(self._on_frame_edited)
         
         # Tab切换
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
@@ -2547,10 +2548,10 @@ class MainWindow(QMainWindow):
             self._frame_manager.select_frame(idx, True)
         # 更新状态栏显示
         self._update_frame_count()
-        
+
         # 自动更新动画预览
         self._update_animation_preview()
-        
+
         # 更新按钮状态
         has_selection = len(selected_indices) > 0
         self.test_bg_btn.setEnabled(has_selection)
@@ -2561,6 +2562,37 @@ class MainWindow(QMainWindow):
         self.crop_btn.setEnabled(has_selection)
         self.enhance_btn.setEnabled(has_selection)
         self.export_btn.setEnabled(has_selection)
+
+    @Slot(int, np.ndarray)
+    def _on_frame_edited(self, frame_index: int, edited_image: np.ndarray):
+        """帧被精修编辑后保存"""
+        frame = self._frame_manager.get_frame(frame_index)
+        if not frame:
+            return
+
+        # 更新帧的图像数据
+        frame.image = edited_image
+        frame.display_image = edited_image
+
+        # 更新预览
+        self.frame_preview.update_frame(frame_index, edited_image)
+
+        # 更新姿势视图（如果当前显示的是该帧）
+        pose = self._frame_manager.get_pose_for_frame(frame_index)
+        self.pose_viewer.set_image_and_pose(edited_image, pose)
+
+        # 添加到历史记录
+        self._history_manager.add_step(
+            "精修帧",
+            f"帧 #{frame_index}",
+            affected_frames=[frame_index]
+        )
+        self.history_panel.refresh(self._history_manager.get_entries(), self._history_manager.get_memory_usage())
+
+        # 更新动画预览
+        self._update_animation_preview()
+
+        self.status_label.setText(f"帧 #{frame_index} 精修完成")
     
     def _on_tab_changed(self, index: int):
         """切换Tab时同步状态"""
