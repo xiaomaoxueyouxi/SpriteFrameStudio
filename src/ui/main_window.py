@@ -991,6 +991,7 @@ class MainWindow(QMainWindow):
         self.frame_preview.selection_changed.connect(self._on_selection_changed)
         self.frame_preview.status_message.connect(self.status_label.setText)
         self.frame_preview.export_single_frame.connect(self.export_single_frame)
+        self.frame_preview.image_edited.connect(self._on_frame_image_edited)
         
         # Tab切换
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
@@ -2542,6 +2543,29 @@ class MainWindow(QMainWindow):
             # 更新姿势视图
             pose = self._frame_manager.get_pose_for_frame(frame_index)
             self.pose_viewer.set_image_and_pose(frame.image, pose)
+    
+    @Slot(int, np.ndarray)
+    def _on_frame_image_edited(self, frame_index: int, edited_image: np.ndarray):
+        """帧图像被编辑（魔棒工具）"""
+        frame = self._frame_manager.get_frame(frame_index)
+        if frame:
+            self._history_manager.push_snapshot(
+                "魔棒编辑",
+                f"手动编辑帧 #{frame_index}",
+                [frame_index],
+                self._frame_manager
+            )
+            
+            self._frame_manager.update_frame_image(frame_index, edited_image, processed=True)
+            
+            self._update_animation_preview()
+            
+            self.history_panel.refresh(
+                self._history_manager.get_entries(),
+                self._history_manager.get_memory_usage()
+            )
+            
+            self.status_label.setText(f"帧 #{frame_index} 已编辑")
     
     def _on_selection_changed(self, selected_indices: list):
         """选择变化"""

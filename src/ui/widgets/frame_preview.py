@@ -16,11 +16,12 @@ class FrameZoomDialog(QDialog):
     """帧放大预览对话框 - 支持左右切换和缩放"""
     
     export_requested = Signal(int)  # frame_index
+    image_edited = Signal(int, np.ndarray)  # frame_index, edited_image
     
     def __init__(self, images: List[np.ndarray], frame_indices: List[int], current_index: int = 0, parent=None):
         super().__init__(parent)
-        self.images = images
-        self.frame_indices = frame_indices
+        self.images = list(images)
+        self.frame_indices = list(frame_indices)
         self.current_index = current_index
         self.zoom_factor = 1.0  # 缩放因子
         self.max_zoom = 5.0     # 最大缩放
@@ -136,7 +137,11 @@ class FrameZoomDialog(QDialog):
         
         bottom_layout.addStretch()
         
-        # 导出按钮
+        self.edit_btn = QPushButton("🪄 魔棒编辑")
+        self.edit_btn.setToolTip("使用魔棒工具手动编辑此帧")
+        self.edit_btn.clicked.connect(self._on_edit_clicked)
+        bottom_layout.addWidget(self.edit_btn)
+        
         export_btn = QPushButton("导出单帧")
         export_btn.clicked.connect(self._on_export_clicked)
         bottom_layout.addWidget(export_btn)
@@ -274,8 +279,30 @@ class FrameZoomDialog(QDialog):
     
     def _on_export_clicked(self):
         """导出按钮点击事件"""
-        self.export_requested.emit(self.frame_index)
+        self.export_requested.emit(self.frame_indices[self.current_index])
         self.accept()
+    
+    def _on_edit_clicked(self):
+        """魔棒编辑按钮点击事件"""
+        from src.ui.widgets.magic_wand_editor import MagicWandEditor
+        
+        current_image = self.images[self.current_index]
+        editor = MagicWandEditor(current_image, self)
+        
+        def on_image_edited(edited_image: np.ndarray):
+            self.images[self.current_index] = edited_image
+            self._display_image()
+            self.image_edited.emit(self.frame_indices[self.current_index], edited_image)
+        
+        editor.image_edited.connect(on_image_edited)
+        editor.exec()
+    
+    def update_image(self, index: int, image: np.ndarray):
+        """更新指定索引的图像"""
+        if 0 <= index < len(self.images):
+            self.images[index] = image
+            if index == self.current_index:
+                self._display_image()
 
 
 class FrameThumbnail(QFrame):
@@ -424,6 +451,7 @@ class FramePreview(QWidget):
     selection_changed = Signal(list)  # List[int] selected indices
     status_message = Signal(str)  # 状态消息
     export_single_frame = Signal(int)  # frame_index
+    image_edited = Signal(int, np.ndarray)  # frame_index, edited_image
     
     def __init__(self, thumbnail_size: int = 120, columns: int = 4, parent=None):
         super().__init__(parent)
@@ -667,9 +695,14 @@ class FramePreview(QWidget):
         
         if images:
             dialog = FrameZoomDialog(images, frame_indices, current_pos, parent=self)
-            # 连接导出信号
             dialog.export_requested.connect(self.export_single_frame)
+            dialog.image_edited.connect(self._on_image_edited)
             dialog.exec()
+    
+    def _on_image_edited(self, frame_index: int, edited_image: np.ndarray):
+        """处理图像编辑完成事件"""
+        self.update_frame(frame_index, edited_image)
+        self.image_edited.emit(frame_index, edited_image)
     
     def _on_selection_changed(self, frame_index: int, is_selected: bool):
         """处理选中状态变化，记录最后一次选中的帧"""
