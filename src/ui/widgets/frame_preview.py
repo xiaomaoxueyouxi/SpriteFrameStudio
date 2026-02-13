@@ -26,7 +26,7 @@ class FrameZoomDialog(QDialog):
         self.zoom_factor = 1.0  # 缩放因子
         self.max_zoom = 5.0     # 最大缩放
         self.min_zoom = 0.1     # 最小缩放
-        self.bg_mode = "gray"   # 背景模式: gray, white, black
+        self.bg_mode = "checkerboard"
         
         self.setWindowTitle(f"帧 #{self.frame_indices[self.current_index]} - 放大预览")
         self.setMinimumSize(800, 600)
@@ -85,9 +85,14 @@ class FrameZoomDialog(QDialog):
         bg_layout = QHBoxLayout()
         bg_layout.addWidget(QLabel("背景:"))
         
+        self.bg_checker_btn = QPushButton("▦ 棋盘")
+        self.bg_checker_btn.setCheckable(True)
+        self.bg_checker_btn.setChecked(True)
+        self.bg_checker_btn.clicked.connect(lambda: self._set_background("checkerboard"))
+        bg_layout.addWidget(self.bg_checker_btn)
+        
         self.bg_gray_btn = QPushButton("⚪ 灰色")
         self.bg_gray_btn.setCheckable(True)
-        self.bg_gray_btn.setChecked(True)
         self.bg_gray_btn.clicked.connect(lambda: self._set_background("gray"))
         bg_layout.addWidget(self.bg_gray_btn)
         
@@ -162,16 +167,20 @@ class FrameZoomDialog(QDialog):
         # 根据背景模式处理透明通道
         display_image = current_image
         if len(current_image.shape) == 3 and current_image.shape[2] == 4:
-            if self.bg_mode == "gray":
-                # 灰色背景使用棋盘格
+            if self.bg_mode == "checkerboard":
                 display_image = composite_on_checkerboard(current_image, square_size=15)
+            elif self.bg_mode == "gray":
+                from PIL import Image
+                pil_img = Image.fromarray(current_image)
+                background = Image.new('RGBA', pil_img.size, (128, 128, 128, 255))
+                pil_img = Image.alpha_composite(background, pil_img)
+                display_image = np.array(pil_img)
             else:
-                # 白色或黑色背景直接合成
                 from PIL import Image
                 pil_img = Image.fromarray(current_image)
                 if self.bg_mode == "white":
                     background = Image.new('RGBA', pil_img.size, (255, 255, 255, 255))
-                else:  # black
+                else:
                     background = Image.new('RGBA', pil_img.size, (0, 0, 0, 255))
                 pil_img = Image.alpha_composite(background, pil_img)
                 display_image = np.array(pil_img)
@@ -239,6 +248,7 @@ class FrameZoomDialog(QDialog):
         self.bg_mode = mode
         
         # 更新按钮选中状态
+        self.bg_checker_btn.setChecked(mode == "checkerboard")
         self.bg_gray_btn.setChecked(mode == "gray")
         self.bg_white_btn.setChecked(mode == "white")
         self.bg_black_btn.setChecked(mode == "black")
@@ -249,7 +259,9 @@ class FrameZoomDialog(QDialog):
     
     def _update_scroll_area_bg(self):
         """更新滚动区域背景色"""
-        if self.bg_mode == "gray":
+        if self.bg_mode == "checkerboard":
+            self.scroll_area.setStyleSheet("background-color: #404040;")
+        elif self.bg_mode == "gray":
             self.scroll_area.setStyleSheet("background-color: #808080;")
         elif self.bg_mode == "white":
             self.scroll_area.setStyleSheet("background-color: #ffffff;")

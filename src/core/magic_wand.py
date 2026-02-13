@@ -314,3 +314,264 @@ def extract_boundary_fast(mask: np.ndarray) -> np.ndarray:
     points = np.argwhere(boundary_mask)
     
     return points[:, [1, 0]]
+
+
+def trace_boundary_contours(mask: np.ndarray) -> List[np.ndarray]:
+    """追踪边界轮廓，返回有序的轮廓点列表"""
+    if mask is None or not np.any(mask > 0):
+        return []
+    
+    h, w = mask.shape
+    binary = (mask > 0).astype(np.uint8)
+    
+    contours = []
+    visited = np.zeros_like(binary, dtype=bool)
+    
+    directions = [(0, 1), (1, 1), (1, 0), (1, -1), (0, -1), (-1, -1), (-1, 0), (-1, 1)]
+    
+    for start_y in range(h):
+        for start_x in range(w):
+            if binary[start_y, start_x] and not visited[start_y, start_x]:
+                is_boundary = False
+                for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    ny, nx = start_y + dy, start_x + dx
+                    if ny < 0 or ny >= h or nx < 0 or nx >= w or not binary[ny, nx]:
+                        is_boundary = True
+                        break
+                
+                if not is_boundary:
+                    visited[start_y, start_x] = True
+                    continue
+                
+                contour = []
+                y, x = start_y, start_x
+                dir_idx = 0
+                
+                max_iter = h * w * 2
+                iter_count = 0
+                
+                while iter_count < max_iter:
+                    iter_count += 1
+                    
+                    if visited[y, x] and len(contour) > 0:
+                        break
+                    
+                    contour.append((x, y))
+                    visited[y, x] = True
+                    
+                    found = False
+                    search_dir = (dir_idx + 5) % 8
+                    
+                    for i in range(8):
+                        check_dir = (search_dir + i) % 8
+                        dy, dx = directions[check_dir]
+                        ny, nx = y + dy, x + dx
+                        
+                        if 0 <= ny < h and 0 <= nx < w and binary[ny, nx]:
+                            y, x = ny, nx
+                            dir_idx = check_dir
+                            found = True
+                            break
+                    
+                    if not found:
+                        break
+                
+                if len(contour) >= 3:
+                    contours.append(np.array(contour, dtype=np.int32))
+    
+    return contours
+
+
+def clean_small_regions(mask: np.ndarray, min_area: int = 10) -> np.ndarray:
+    """清理小的孤立区域"""
+    if mask is None or not np.any(mask > 0):
+        return mask
+    
+    binary = (mask > 0.5).astype(np.uint8)
+    h, w = binary.shape
+    visited = np.zeros_like(binary)
+    result = np.zeros_like(binary)
+    
+    for y in range(h):
+        for x in range(w):
+            if binary[y, x] and not visited[y, x]:
+                stack = [(y, x)]
+                region = []
+                
+                while stack:
+                    cy, cx = stack.pop()
+                    if visited[cy, cx]:
+                        continue
+                    visited[cy, cx] = 1
+                    region.append((cy, cx))
+                    
+                    for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        ny, nx = cy + dy, cx + dx
+                        if 0 <= ny < h and 0 <= nx < w and binary[ny, nx] and not visited[ny, nx]:
+                            stack.append((ny, nx))
+                
+                if len(region) >= min_area:
+                    for ry, rx in region:
+                        result[ry, rx] = 1
+    
+    return result.astype(np.float32)
+
+
+def grow_selection(image: np.ndarray, mask: np.ndarray, tolerance: int = 32) -> np.ndarray:
+    """扩大选取 - 基于颜色相似性扩展选区
+    
+    类似Photoshop的"扩大选取"(Grow)功能：
+    1. 分析选区边界像素的颜色
+    2. 在图像中查找与边界颜色相似的像素
+    3. 只添加与现有选区相邻的相似像素（保持连续性）
+    
+    Args:
+        image: RGB或RGBA图像
+        mask: 当前选区mask
+        tolerance: 颜色容差
+    
+    Returns:
+        扩展后的mask
+    """
+    if mask is None or not np.any(mask > 0):
+        return mask
+    
+    h, w = mask.shape
+    binary = (mask > 0.5)
+    
+    # 获取图像RGB
+    if len(image.shape) == 3 and image.shape[2] >= 3:
+        rgb = image[:, :, :3].astype(np.int16)
+    else:
+        return mask
+    
+    # 提取选区边界像素（选区内且与选区外相邻的像素）
+    padded_binary = np.pad(binary, 1, mode='constant', constant_values=False)
+    boundary_mask = binary & (
+        ~padded_binary[:-2, 1:-1] | ~padded_binary[2:, 1:-1] |
+        ~padded_binary[1:-1, :-2] | ~padded_binary[1:-1, 2:]
+    )
+    
+    boundary_points = np.argwhere(boundary_mask)
+    if len(boundary_points) == 0:
+        return mask
+    
+    # 收集边界颜色
+    boundary_colors = set()
+    for y, x in boundary_points:
+        color = tuple(rgb[y, x])
+        boundary_colors.add(color)
+    
+    # 查找与边界颜色相似且与选区相邻的像素
+    new_mask = binary.copy()
+    checked = binary.copy()  # 已经在选区内的不需要再检查
+    
+    # 只检查与选区相邻的非选区像素
+    for y in range(h):
+        for x in range(w):
+            if checked[y, x]:
+                continue
+            
+            # 检查是否与选区相邻
+            has_neighbor = False
+            for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < h and 0 <= nx < w and binary[ny, nx]:
+                    has_neighbor = True
+                    break
+            
+            if not has_neighbor:
+                continue
+            
+            # 检查颜色是否与某个边界颜色相似
+            pixel_color = rgb[y, x]
+            for bc in boundary_colors:
+                color_diff = np.abs(np.array(bc) - pixel_color)
+                if np.max(color_diff) <= tolerance:
+                    new_mask[y, x] = True
+                    break
+    
+    return new_mask.astype(np.float32)
+
+
+def expand_selection_by_color(image: np.ndarray, mask: np.ndarray, tolerance: int = 32, 
+                               contiguous: bool = True) -> np.ndarray:
+    """基于颜色相似性扩展选区（更智能的版本）
+    
+    分析选区边缘每个像素的颜色，然后在图像中查找相似颜色
+    
+    Args:
+        image: RGB或RGBA图像
+        mask: 当前选区mask
+        tolerance: 颜色容差
+        contiguous: 是否只扩展与选区相邻的区域
+    
+    Returns:
+        扩展后的mask
+    """
+    if mask is None or not np.any(mask > 0):
+        return mask
+    
+    h, w = mask.shape
+    binary = (mask > 0.5)
+    
+    # 提取边缘像素坐标
+    padded = np.pad(binary, 1, mode='constant', constant_values=False)
+    edge_mask = (
+        (padded[:-2, 1:-1] & ~binary) |
+        (padded[2:, 1:-1] & ~binary) |
+        (padded[1:-1, :-2] & ~binary) |
+        (padded[1:-1, 2:] & ~binary)
+    )
+    
+    edge_points = np.argwhere(edge_mask)
+    if len(edge_points) == 0:
+        return mask
+    
+    # 获取图像RGB
+    if len(image.shape) == 3 and image.shape[2] >= 3:
+        rgb = image[:, :, :3].astype(np.int16)
+    else:
+        return mask
+    
+    # 收集边缘颜色
+    edge_colors = []
+    for y, x in edge_points:
+        edge_colors.append(rgb[y, x])
+    
+    if len(edge_colors) == 0:
+        return mask
+    
+    edge_colors = np.array(edge_colors)
+    
+    # 计算每个非选区像素与最近边缘颜色的距离
+    non_selected = ~binary
+    non_selected_points = np.argwhere(non_selected)
+    
+    if len(non_selected_points) == 0:
+        return mask
+    
+    new_mask = binary.copy()
+    
+    # 批量处理以提高性能
+    for y, x in non_selected_points:
+        pixel_color = rgb[y, x]
+        # 计算与所有边缘颜色的最小距离
+        color_diff = np.abs(edge_colors - pixel_color)
+        min_dist = np.min(np.max(color_diff, axis=1))
+        
+        if min_dist <= tolerance:
+            if contiguous:
+                # 检查是否与现有选区相邻
+                has_neighbor = False
+                for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    ny, nx = y + dy, x + dx
+                    if 0 <= ny < h and 0 <= nx < w and binary[ny, nx]:
+                        has_neighbor = True
+                        break
+                if has_neighbor:
+                    new_mask[y, x] = True
+            else:
+                new_mask[y, x] = True
+    
+    return new_mask.astype(np.float32)
