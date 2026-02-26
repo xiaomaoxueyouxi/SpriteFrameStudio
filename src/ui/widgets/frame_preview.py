@@ -5,11 +5,162 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QCheckBox, QFrame, QSizePolicy,
     QPushButton, QDialog, QSpinBox
 )
-from PySide6.QtCore import Qt, Signal, QSize, QEvent
-from PySide6.QtGui import QPixmap, QImage, QPainter, QColor
+from PySide6.QtCore import Qt, Signal, QSize, QEvent, QPoint
+from PySide6.QtGui import QPixmap, QImage, QPainter, QColor, QCursor
 import numpy as np
 
 from src.utils.image_utils import numpy_to_qpixmap, composite_on_checkerboard
+
+
+class FrameImageCanvas(QWidget):
+    """帧图像画布 - 支持滚轮缩放和中键拖动"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        
+        self._pixmap: Optional[QPixmap] = None
+        self._zoom = 1.0
+        self._min_zoom = 0.1
+        self._max_zoom = 32.0
+        
+        self._panning = False
+        self._last_pan_pos = QPoint()
+        self._offset_x = 0
+        self._offset_y = 0
+        
+        self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setMinimumSize(400, 300)
+    
+    def set_pixmap(self, pixmap: QPixmap, reset_view: bool = True):
+        """设置图像"""
+        self._pixmap = pixmap
+        if reset_view:
+            self._fit_to_view()
+        else:
+            self.update()
+    
+    def _fit_to_view(self):
+        """适应窗口大小"""
+        if self._pixmap is None:
+            return
+        
+        view_w = self.width() - 40
+        view_h = self.height() - 40
+        
+        if view_w <= 0 or view_h <= 0:
+            return
+        
+        img_w = self._pixmap.width()
+        img_h = self._pixmap.height()
+        
+        scale_x = view_w / img_w
+        scale_y = view_h / img_h
+        self._zoom = min(scale_x, scale_y, 1.0)
+        
+        self._offset_x = (self.width() - img_w * self._zoom) / 2
+        self._offset_y = (self.height() - img_h * self._zoom) / 2
+        
+        self.update()
+    
+    def get_zoom(self) -> float:
+        return self._zoom
+    
+    def set_zoom(self, zoom: float, center_pos: QPoint = None):
+        """设置缩放级别，可选以指定位置为中心"""
+        if self._pixmap is None:
+            return
+        
+        old_zoom = self._zoom
+        self._zoom = max(self._min_zoom, min(self._max_zoom, zoom))
+        
+        if center_pos is not None:
+            # 以鼠标位置为中心缩放
+            img_x = (center_pos.x() - self._offset_x) / old_zoom
+            img_y = (center_pos.y() - self._offset_y) / old_zoom
+            
+            self._offset_x = center_pos.x() - img_x * self._zoom
+            self._offset_y = center_pos.y() - img_y * self._zoom
+        else:
+            # 以画布中心为中心缩放
+            center_x = self.width() / 2
+            center_y = self.height() / 2
+            
+            img_x = (center_x - self._offset_x) / old_zoom
+            img_y = (center_y - self._offset_y) / old_zoom
+            
+            self._offset_x = center_x - img_x * self._zoom
+            self._offset_y = center_y - img_y * self._zoom
+        
+        self.update()
+    
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        
+        # 填充背景
+        painter.fillRect(self.rect(), QColor(26, 26, 26))
+        
+        if self._pixmap is None:
+            return
+        
+        # 绘制缩放后的图像
+        target_w = int(self._pixmap.width() * self._zoom)
+        target_h = int(self._pixmap.height() * self._zoom)
+        
+        if target_w > 0 and target_h > 0:
+            scaled = self._pixmap.scaled(
+                target_w, target_h,
+                Qt.KeepAspectRatio, Qt.SmoothTransformation
+            )
+            painter.drawPixmap(int(self._offset_x), int(self._offset_y), scaled)
+    
+    def wheelEvent(self, event):
+        """滚轮缩放"""
+        if self._pixmap is None:
+            return
+        
+        delta = event.angleDelta().y()
+        if delta == 0:
+            return
+        
+        # 缩放因子
+        factor = 1.1 if delta > 0 else 1 / 1.1
+        new_zoom = self._zoom * factor
+        
+        # 以鼠标位置为中心缩放
+        self.set_zoom(new_zoom, event.position().toPoint())
+    
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MiddleButton or event.button() == Qt.RightButton:
+            self._panning = True
+            self._last_pan_pos = event.pos()
+            self.setCursor(QCursor(Qt.ClosedHandCursor))
+        else:
+            super().mousePressEvent(event)
+    
+    def mouseMoveEvent(self, event):
+        if self._panning:
+            delta = event.pos() - self._last_pan_pos
+            self._offset_x += delta.x()
+            self._offset_y += delta.y()
+            self._last_pan_pos = event.pos()
+            self.update()
+        else:
+            super().mouseMoveEvent(event)
+    
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MiddleButton or event.button() == Qt.RightButton:
+            self._panning = False
+            self.setCursor(QCursor(Qt.ArrowCursor))
+        else:
+            super().mouseReleaseEvent(event)
+    
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # 保持图像居中
+        if self._pixmap:
+            self.update()
 
 
 class FrameZoomDialog(QDialog):
@@ -24,7 +175,7 @@ class FrameZoomDialog(QDialog):
         self.frame_indices = list(frame_indices)
         self.current_index = current_index
         self.zoom_factor = 1.0  # 缩放因子
-        self.max_zoom = 5.0     # 最大缩放
+        self.max_zoom = 32.0     # 最大缩放
         self.min_zoom = 0.1     # 最小缩放
         self.bg_mode = "checkerboard"
         
@@ -111,18 +262,9 @@ class FrameZoomDialog(QDialog):
         toolbar.addLayout(zoom_layout)
         layout.addLayout(toolbar)
         
-        # 图像显示区域（可滚动）
-        from PySide6.QtWidgets import QScrollArea
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setAlignment(Qt.AlignCenter)
-        self._update_scroll_area_bg()
-        
-        self.image_label = QLabel()
-        self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setStyleSheet("background-color: #1a1a1a;")
-        self.scroll_area.setWidget(self.image_label)
-        layout.addWidget(self.scroll_area)
+        # 图像显示区域 - 使用自定义画布支持滚轮缩放和中键拖动
+        self.image_canvas = FrameImageCanvas()
+        layout.addWidget(self.image_canvas, 1)
         
         # 底部信息和按钮
         bottom_layout = QHBoxLayout()
@@ -187,16 +329,10 @@ class FrameZoomDialog(QDialog):
         
         pixmap = numpy_to_qpixmap(display_image)
         
-        # 应用缩放
-        scaled_width = int(pixmap.width() * self.zoom_factor)
-        scaled_height = int(pixmap.height() * self.zoom_factor)
-        
-        # 使用高质量缩放
-        scaled = pixmap.scaled(
-            scaled_width, scaled_height,
-            Qt.KeepAspectRatio, Qt.SmoothTransformation
-        )
-        self.image_label.setPixmap(scaled)
+        # 使用自定义画布显示图像
+        self.image_canvas.set_pixmap(pixmap, reset_view=False)
+        # 同步缩放级别
+        self.image_canvas.set_zoom(self.zoom_factor)
         
         # 更新窗口标题和控件状态
         self.setWindowTitle(f"帧 #{self.frame_indices[self.current_index]} - 放大预览")
@@ -229,19 +365,28 @@ class FrameZoomDialog(QDialog):
     def _zoom_in(self):
         """放大"""
         if self.zoom_factor < self.max_zoom:
-            self.zoom_factor = min(self.zoom_factor * 1.2, self.max_zoom)
-            self._display_image()
+            self.zoom_factor = min(self.zoom_factor * 1.25, self.max_zoom)
+            self.image_canvas.set_zoom(self.zoom_factor)
+            self.zoom_label.setText(f"{int(self.zoom_factor * 100)}%")
+            self.zoom_out_btn.setEnabled(self.zoom_factor > self.min_zoom)
+            self.zoom_in_btn.setEnabled(self.zoom_factor < self.max_zoom)
     
     def _zoom_out(self):
         """缩小"""
         if self.zoom_factor > self.min_zoom:
-            self.zoom_factor = max(self.zoom_factor / 1.2, self.min_zoom)
-            self._display_image()
+            self.zoom_factor = max(self.zoom_factor / 1.25, self.min_zoom)
+            self.image_canvas.set_zoom(self.zoom_factor)
+            self.zoom_label.setText(f"{int(self.zoom_factor * 100)}%")
+            self.zoom_out_btn.setEnabled(self.zoom_factor > self.min_zoom)
+            self.zoom_in_btn.setEnabled(self.zoom_factor < self.max_zoom)
     
     def _reset_zoom(self):
         """重置缩放"""
         self.zoom_factor = 1.0
-        self._display_image()
+        self.image_canvas.set_zoom(self.zoom_factor)
+        self.zoom_label.setText(f"{int(self.zoom_factor * 100)}%")
+        self.zoom_out_btn.setEnabled(self.zoom_factor > self.min_zoom)
+        self.zoom_in_btn.setEnabled(self.zoom_factor < self.max_zoom)
     
     def _set_background(self, mode: str):
         """设置背景模式"""
@@ -254,19 +399,7 @@ class FrameZoomDialog(QDialog):
         self.bg_black_btn.setChecked(mode == "black")
         
         # 更新背景显示
-        self._update_scroll_area_bg()
         self._display_image()
-    
-    def _update_scroll_area_bg(self):
-        """更新滚动区域背景色"""
-        if self.bg_mode == "checkerboard":
-            self.scroll_area.setStyleSheet("background-color: #404040;")
-        elif self.bg_mode == "gray":
-            self.scroll_area.setStyleSheet("background-color: #808080;")
-        elif self.bg_mode == "white":
-            self.scroll_area.setStyleSheet("background-color: #ffffff;")
-        elif self.bg_mode == "black":
-            self.scroll_area.setStyleSheet("background-color: #000000;")
     
     def _update_info(self):
         """更新底部信息显示"""
