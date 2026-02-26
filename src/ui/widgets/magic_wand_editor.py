@@ -5,14 +5,15 @@ import numpy as np
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QWidget, QLabel,
     QPushButton, QSlider, QSpinBox, QCheckBox, QComboBox,
-    QScrollArea, QFrame, QGroupBox, QMessageBox, QColorDialog
+    QScrollArea, QFrame, QGroupBox, QMessageBox, QColorDialog,
+    QApplication
 )
 from PySide6.QtCore import Qt, Signal, QPoint, QTimer, QPointF
 from PySide6.QtGui import (
     QPainter, QPixmap, QPen, QColor, QCursor, QImage, QPainterPath
 )
 
-from src.core.magic_wand import MagicWand, extract_boundary_fast, clean_small_regions, grow_selection
+from src.core.magic_wand import MagicWand, clean_small_regions, grow_selection, shrink_selection
 from src.utils.image_utils import numpy_to_qpixmap
 
 
@@ -94,7 +95,6 @@ class ImageCanvas(QWidget):
         self._image: Optional[np.ndarray] = None
         self._display_pixmap: Optional[QPixmap] = None
         self._selection_mask: Optional[np.ndarray] = None
-        self._boundary_points: Optional[np.ndarray] = None
         
         self._bg_mode = "checkerboard"
         
@@ -107,10 +107,6 @@ class ImageCanvas(QWidget):
         self._offset_x = 0
         self._offset_y = 0
         
-        self._ant_offset = 0
-        self._animation_timer = QTimer(self)
-        self._animation_timer.timeout.connect(self._animate_ants)
-        
         self._checkerboard_cache: Optional[np.ndarray] = None
         
         self.setMouseTracking(True)
@@ -121,7 +117,6 @@ class ImageCanvas(QWidget):
         self._image = image.copy()
         if reset_view:
             self._selection_mask = None
-            self._boundary_points = None
             self._update_display_pixmap()
             self._fit_to_view()
         else:
@@ -135,10 +130,6 @@ class ImageCanvas(QWidget):
         if mask is not None:
             mask = np.clip(mask, 0, 1).astype(np.float32)
         self._selection_mask = mask
-        if mask is not None and np.any(mask > 0):
-            self._boundary_points = extract_boundary_fast(mask)
-        else:
-            self._boundary_points = None
         self.update()
         self.selection_changed.emit()
     
@@ -210,17 +201,6 @@ class ImageCanvas(QWidget):
         
         self.update()
     
-    def _animate_ants(self):
-        self._ant_offset = (self._ant_offset + 1) % 8
-        self.update()
-    
-    def start_ant_animation(self):
-        if not self._animation_timer.isActive():
-            self._animation_timer.start(120)
-    
-    def stop_ant_animation(self):
-        self._animation_timer.stop()
-    
     def image_to_screen(self, img_x: int, img_y: int) -> Tuple[int, int]:
         sx = int(img_x * self._zoom + self._offset_x)
         sy = int(img_y * self._zoom + self._offset_y)
@@ -249,8 +229,9 @@ class ImageCanvas(QWidget):
                 self._display_pixmap
             )
             
-            if self._boundary_points is not None and len(self._boundary_points) > 0:
-                self._draw_marching_ants_fast(painter)
+            # 用绿色半透明填充显示选区
+            if self._selection_mask is not None and np.any(self._selection_mask > 0):
+                self._draw_selection_overlay(painter)
         
         if self._display_pixmap is not None:
             painter.setPen(QPen(QColor(100, 100, 100), 1))
@@ -261,39 +242,49 @@ class ImageCanvas(QWidget):
                 int(self._display_pixmap.height() * self._zoom) + 1
             )
     
-    def _draw_marching_ants_fast(self, painter: QPainter):
-        """绘制蚂蚁线"""
-        if self._boundary_points is None or len(self._boundary_points) == 0:
+    def _draw_selection_overlay(self, painter: QPainter):
+        """绘制选区覆盖层 - 绿色半透明填充"""
+        if self._selection_mask is None:
             return
         
+        h, w = self._selection_mask.shape
         zoom = self._zoom
         offset_x = self._offset_x
         offset_y = self._offset_y
         
-        pen_white = QPen(QColor(255, 255, 255), 2)
-        pen_black = QPen(QColor(0, 0, 0), 2)
+        # 使用 numpy 批量创建 overlay 图像
+        binary_mask = (self._selection_mask > 0.5)
         
-        dash_pattern = [4, 4]
-        pen_white.setDashPattern(dash_pattern)
-        pen_black.setDashPattern(dash_pattern)
-        pen_white.setDashOffset(self._ant_offset)
-        pen_black.setDashOffset(self._ant_offset + 4)
+        # 创建 RGBA 数组
+        overlay_rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        overlay_rgba[binary_mask] = [0, 255, 0, 80]  # 绿色半透明
         
-        points = self._boundary_points
+        # 转换为 QImage
+        overlay = QImage(overlay_rgba.data, w, h, w * 4, QImage.Format_ARGB32)
         
-        painter.setPen(pen_black)
-        for i in range(len(points)):
-            x, y = points[i]
-            sx = int(x * zoom + offset_x)
-            sy = int(y * zoom + offset_y)
-            painter.drawPoint(sx, sy)
+        # 缩放并绘制
+        scaled_overlay = overlay.scaled(
+            int(w * zoom), int(h * zoom),
+            Qt.IgnoreAspectRatio, Qt.FastTransformation
+        )
+        painter.drawImage(int(offset_x), int(offset_y), scaled_overlay)
         
-        painter.setPen(pen_white)
-        for i in range(len(points)):
-            x, y = points[i]
-            sx = int(x * zoom + offset_x)
-            sy = int(y * zoom + offset_y)
-            painter.drawPoint(sx + 1, sy + 1)
+        # 绘制绿色边框
+        painter.setPen(QPen(QColor(0, 255, 0), 2))
+        
+        # 找到选区边界矩形
+        rows = np.any(binary_mask, axis=1)
+        cols = np.any(binary_mask, axis=0)
+        if np.any(rows) and np.any(cols):
+            y_min, y_max = np.where(rows)[0][[0, -1]]
+            x_min, x_max = np.where(cols)[0][[0, -1]]
+            
+            painter.drawRect(
+                int(x_min * zoom + offset_x),
+                int(y_min * zoom + offset_y),
+                int((x_max - x_min + 1) * zoom),
+                int((y_max - y_min + 1) * zoom)
+            )
     
     def wheelEvent(self, event):
         if self._display_pixmap is None:
@@ -386,7 +377,6 @@ class MagicWandEditor(QDialog):
         self._save_state()
         
         self._canvas.set_image(self._current_image)
-        self._canvas.start_ant_animation()
     
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -608,9 +598,15 @@ class MagicWandEditor(QDialog):
         self._invert_btn.setToolTip("反转选区 (Ctrl+I)")
         edit_layout.addWidget(self._invert_btn)
         
-        self._grow_btn = QPushButton("扩大选取")
-        self._grow_btn.setToolTip("基于颜色相似性扩展选区")
-        edit_layout.addWidget(self._grow_btn)
+        grow_shrink_row = QHBoxLayout()
+        self._grow_btn = QPushButton("扩大")
+        self._grow_btn.setToolTip("扩大选区1像素")
+        grow_shrink_row.addWidget(self._grow_btn)
+        
+        self._shrink_btn = QPushButton("缩小")
+        self._shrink_btn.setToolTip("缩小选区1像素")
+        grow_shrink_row.addWidget(self._shrink_btn)
+        edit_layout.addLayout(grow_shrink_row)
         
         self._deselect_btn = QPushButton("取消选区")
         self._deselect_btn.setToolTip("取消当前选区 (Ctrl+D)")
@@ -721,6 +717,7 @@ class MagicWandEditor(QDialog):
         self._fill_color_btn.clicked.connect(self._choose_fill_color)
         self._invert_btn.clicked.connect(self._invert_selection)
         self._grow_btn.clicked.connect(self._grow_selection)
+        self._shrink_btn.clicked.connect(self._shrink_selection)
         self._deselect_btn.clicked.connect(self._deselect)
         
         self._ok_btn.clicked.connect(self.accept)
@@ -896,19 +893,34 @@ class MagicWandEditor(QDialog):
             self._status_label.setText("已全选")
     
     def _grow_selection(self):
-        """扩大选取 - 基于颜色相似性扩展选区"""
+        """扩大选区 - 向外扩展1像素"""
         if not self._canvas.has_selection():
             self._status_label.setText("请先创建选区")
             return
         
         mask = self._canvas.get_selection()
-        new_mask = grow_selection(self._current_image, mask, tolerance=self._tolerance)
+        new_mask = grow_selection(mask, pixels=1)
         
         old_area = np.sum(mask > 0.5)
         new_area = np.sum(new_mask > 0.5)
         
         self._canvas.set_selection(new_mask)
-        self._status_label.setText(f"扩大选取: {int(old_area)} -> {int(new_area)} 像素")
+        self._status_label.setText(f"扩大选区: {int(old_area)} -> {int(new_area)} 像素")
+    
+    def _shrink_selection(self):
+        """缩小选区 - 向内收缩1像素"""
+        if not self._canvas.has_selection():
+            self._status_label.setText("请先创建选区")
+            return
+        
+        mask = self._canvas.get_selection()
+        new_mask = shrink_selection(mask, pixels=1)
+        
+        old_area = np.sum(mask > 0.5)
+        new_area = np.sum(new_mask > 0.5)
+        
+        self._canvas.set_selection(new_mask)
+        self._status_label.setText(f"缩小选区: {int(old_area)} -> {int(new_area)} 像素")
     
     def _deselect(self):
         self._canvas.set_selection(None)
@@ -1041,7 +1053,6 @@ class MagicWandEditor(QDialog):
         return self._current_image
     
     def closeEvent(self, event):
-        from PyQt6.QtWidgets import QMessageBox
         if not self._result_saved and self._history.can_undo():
             reply = QMessageBox.question(
                 self, "保存编辑",
@@ -1053,12 +1064,10 @@ class MagicWandEditor(QDialog):
                 return
             elif reply == QMessageBox.StandardButton.Yes:
                 self._result_saved = True
-                self._canvas.stop_ant_animation()
                 self.image_edited.emit(self._current_image)
                 super().closeEvent(event)
                 return
         
-        self._canvas.stop_ant_animation()
         super().closeEvent(event)
     
     def accept(self):
@@ -1067,5 +1076,4 @@ class MagicWandEditor(QDialog):
         super().accept()
     
     def reject(self):
-        self._canvas.stop_ant_animation()
         super().reject()

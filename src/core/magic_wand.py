@@ -417,18 +417,12 @@ def clean_small_regions(mask: np.ndarray, min_area: int = 10) -> np.ndarray:
     return result.astype(np.float32)
 
 
-def grow_selection(image: np.ndarray, mask: np.ndarray, tolerance: int = 32) -> np.ndarray:
-    """扩大选取 - 基于颜色相似性扩展选区
-    
-    类似Photoshop的"扩大选取"(Grow)功能：
-    1. 分析选区边界像素的颜色
-    2. 在图像中查找与边界颜色相似的像素
-    3. 只添加与现有选区相邻的相似像素（保持连续性）
+def grow_selection(mask: np.ndarray, pixels: int = 1) -> np.ndarray:
+    """扩大选区 - 几何膨胀，向外扩展指定像素数
     
     Args:
-        image: RGB或RGBA图像
         mask: 当前选区mask
-        tolerance: 颜色容差
+        pixels: 扩展的像素数（默认1）
     
     Returns:
         扩展后的mask
@@ -436,62 +430,47 @@ def grow_selection(image: np.ndarray, mask: np.ndarray, tolerance: int = 32) -> 
     if mask is None or not np.any(mask > 0):
         return mask
     
-    h, w = mask.shape
     binary = (mask > 0.5)
     
-    # 获取图像RGB
-    if len(image.shape) == 3 and image.shape[2] >= 3:
-        rgb = image[:, :, :3].astype(np.int16)
-    else:
+    # 使用膨胀操作扩展选区
+    for _ in range(pixels):
+        padded = np.pad(binary, 1, mode='constant', constant_values=False)
+        # 3x3邻域，只要有一个邻居是True，当前就是True
+        binary = (
+            padded[:-2, :-2] | padded[:-2, 1:-1] | padded[:-2, 2:] |
+            padded[1:-1, :-2] | padded[1:-1, 1:-1] | padded[1:-1, 2:] |
+            padded[2:, :-2] | padded[2:, 1:-1] | padded[2:, 2:]
+        )
+    
+    return binary.astype(np.float32)
+
+
+def shrink_selection(mask: np.ndarray, pixels: int = 1) -> np.ndarray:
+    """缩小选区 - 几何腐蚀，向内收缩指定像素数
+    
+    Args:
+        mask: 当前选区mask
+        pixels: 收缩的像素数（默认1）
+    
+    Returns:
+        收缩后的mask
+    """
+    if mask is None or not np.any(mask > 0):
         return mask
     
-    # 提取选区边界像素（选区内且与选区外相邻的像素）
-    padded_binary = np.pad(binary, 1, mode='constant', constant_values=False)
-    boundary_mask = binary & (
-        ~padded_binary[:-2, 1:-1] | ~padded_binary[2:, 1:-1] |
-        ~padded_binary[1:-1, :-2] | ~padded_binary[1:-1, 2:]
-    )
+    binary = (mask > 0.5)
     
-    boundary_points = np.argwhere(boundary_mask)
-    if len(boundary_points) == 0:
-        return mask
+    # 使用腐蚀操作收缩选区
+    for _ in range(pixels):
+        padded = np.pad(binary, 1, mode='constant', constant_values=False)
+        # 3x3邻域，所有邻居都是True，当前才是True
+        binary = (
+            padded[:-2, :-2] & padded[:-2, 1:-1] & padded[:-2, 2:] &
+            padded[1:-1, :-2] & padded[1:-1, 1:-1] & padded[1:-1, 2:] &
+            padded[2:, :-2] & padded[2:, 1:-1] & padded[2:, 2:]
+        )
     
-    # 收集边界颜色
-    boundary_colors = set()
-    for y, x in boundary_points:
-        color = tuple(rgb[y, x])
-        boundary_colors.add(color)
-    
-    # 查找与边界颜色相似且与选区相邻的像素
-    new_mask = binary.copy()
-    checked = binary.copy()  # 已经在选区内的不需要再检查
-    
-    # 只检查与选区相邻的非选区像素
-    for y in range(h):
-        for x in range(w):
-            if checked[y, x]:
-                continue
-            
-            # 检查是否与选区相邻
-            has_neighbor = False
-            for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                ny, nx = y + dy, x + dx
-                if 0 <= ny < h and 0 <= nx < w and binary[ny, nx]:
-                    has_neighbor = True
-                    break
-            
-            if not has_neighbor:
-                continue
-            
-            # 检查颜色是否与某个边界颜色相似
-            pixel_color = rgb[y, x]
-            for bc in boundary_colors:
-                color_diff = np.abs(np.array(bc) - pixel_color)
-                if np.max(color_diff) <= tolerance:
-                    new_mask[y, x] = True
-                    break
-    
-    return new_mask.astype(np.float32)
+    return binary.astype(np.float32)
 
 
 def expand_selection_by_color(image: np.ndarray, mask: np.ndarray, tolerance: int = 32, 
