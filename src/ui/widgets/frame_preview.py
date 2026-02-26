@@ -10,6 +10,7 @@ from PySide6.QtGui import QPixmap, QImage, QPainter, QColor, QCursor
 import numpy as np
 
 from src.utils.image_utils import numpy_to_qpixmap, composite_on_checkerboard
+from src.utils.config import config
 
 
 class FrameImageCanvas(QWidget):
@@ -645,8 +646,8 @@ class FramePreview(QWidget):
         toolbar.addSpacing(10)
         toolbar.addWidget(QLabel("间隔:"))
         self.interval_spin = QSpinBox()
-        self.interval_spin.setRange(2, 100)
-        self.interval_spin.setValue(2)
+        self.interval_spin.setRange(2, config.FRAME_INTERVAL_MAX)
+        self.interval_spin.setValue(config.FRAME_INTERVAL_DEFAULT)
         self.interval_spin.setFixedWidth(50)
         self.interval_spin.setStyleSheet("background-color: #3d3d3d; border: 1px solid #4d4d4d; border-radius: 4px; padding: 2px; color: #eee;")
         toolbar.addWidget(self.interval_spin)
