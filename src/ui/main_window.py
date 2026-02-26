@@ -309,10 +309,10 @@ class MainWindow(QMainWindow):
     def _create_video_page(self) -> QWidget:
         """创建准备视频页面"""
         page = QWidget()
-        page.setMaximumHeight(300)  # 限制高度，避免不必要的滚动条
+        # 不限制高度，让内容自然展开
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(15)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(12)
         
         # 打开视频
         self.open_btn = QPushButton("📁 打开本地视频")
