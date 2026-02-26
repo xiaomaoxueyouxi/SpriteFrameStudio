@@ -21,6 +21,7 @@ from src.ui.widgets.pose_viewer import PoseViewer
 from src.ui.widgets.export_dialog import ExportDialog
 from src.ui.widgets.animation_preview import AnimationPreview
 from src.ui.widgets.history_panel import HistoryPanel
+from src.ui.widgets.i2v_panel import I2VPanel
 
 from src.core.video_processor import VideoProcessor
 from src.core.frame_manager import FrameManager
@@ -44,7 +45,7 @@ class VerticalTabButton(QPushButton):
         super().__init__(text, parent)
         self.setCheckable(True)
         self.setFixedWidth(60)
-        self.setMinimumHeight(100)
+        # 移除最小高度限制，让按钮根据布局自然伸展
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         
     def paintEvent(self, event):
@@ -73,12 +74,8 @@ class VerticalTabButton(QPushButton):
         # 计算总高度
         total_height = char_height * len(text)
         
-        # 起始Y位置（居中）
-        # 确保即使在按钮高度有限的情况下也能正确居中
-        ascent = font_metrics.ascent()
-        # 计算垂直居中位置，确保文字不会超出按钮边界
-        available_height = self.height() - 40  # 预留上下边距
-        start_y = max(20, min(self.height() - total_height - 10, (self.height() - total_height) / 2 + ascent))
+        # 垂直居中计算（考虑按钮的实际尺寸）
+        start_y = max(5, min(self.height() - total_height - 5, (self.height() - total_height) / 2 + font_metrics.ascent()))
         
         # 逐字绘制
         x = self.width() / 2
@@ -86,6 +83,11 @@ class VerticalTabButton(QPushButton):
             char_width = font_metrics.horizontalAdvance(char)
             y = start_y + i * char_height
             painter.drawText(int(x - char_width / 2), int(y), char)
+    
+    def resizeEvent(self, event):
+        """大小改变时重绘"""
+        super().resizeEvent(event)
+        self.update()
 
 
 class MainWindow(QMainWindow):
@@ -116,13 +118,11 @@ class MainWindow(QMainWindow):
         # 垂直Tab按钮列表
         self.tab_buttons = []
         
-        self.setup_ui()
-        self.setup_connections()
-        
-        # 性能监控定时器
+        # 性能监控定时器（必须在 setup_ui 之前创建）
         self.performance_timer = QTimer(self)
         self.performance_timer.timeout.connect(self.update_performance_stats)
-        self.performance_timer.start(1000)  # 每秒更新一次
+        
+        self.setup_ui()
     
     def _apply_flow_btn_style(self, button: QPushButton):
         """为主要操作按钮应用统一样式"""
@@ -157,7 +157,7 @@ class MainWindow(QMainWindow):
         tab_bar_layout.setSpacing(0)
         
         # 创建垂直Tab按钮
-        tab_names = ["准备视频", "动作分析", "批量缩放", "背景处理", "边缘优化", "描边", "空白裁剪", "图像增强", "导出"]
+        tab_names = ["视频生成", "准备视频", "动作分析", "批量缩放", "背景处理", "边缘优化", "描边", "空白裁剪", "图像增强", "导出"]
         
         # 创建按钮组实现互斥选择
         self.tab_button_group = QButtonGroup()
@@ -177,6 +177,9 @@ class MainWindow(QMainWindow):
         if self.tab_buttons:
             self.tab_buttons[0].setChecked(True)
         
+        # 窗口显示后刷新按钮布局
+        QTimer.singleShot(100, self._refresh_tab_buttons)
+        
         tab_bar_layout.addStretch()
         main_layout.addWidget(self.vertical_tab_bar)
         
@@ -184,11 +187,10 @@ class MainWindow(QMainWindow):
         self.sidebar_widget = QWidget()
         self.sidebar_widget.setObjectName("sidebar")
         self.sidebar_widget.setFixedWidth(360)
-        # 不设置自定义样式，使用Qt默认样式（与导出设置对话框一致）
         
         sidebar_layout = QVBoxLayout(self.sidebar_widget)
-        sidebar_layout.setContentsMargins(10, 10, 10, 10)
-        sidebar_layout.setSpacing(10)
+        sidebar_layout.setContentsMargins(5, 5, 5, 5)
+        sidebar_layout.setSpacing(5)
         
         # 使用StackedWidget管理不同页面
         self.page_stack = QStackedWidget()
@@ -196,7 +198,29 @@ class MainWindow(QMainWindow):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # 禁用横向滚动条
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)  # 垂直滚动条按需显示
         scroll.setWidget(self.page_stack)
+        # 设置滚动条样式，不遮挡内容
+        scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+            }
+            QScrollBar:vertical {
+                width: 8px;
+                background: transparent;
+            }
+            QScrollBar::handle:vertical {
+                background: #555;
+                border-radius: 4px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #777;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
         
         sidebar_layout.addWidget(scroll)
         main_layout.addWidget(self.sidebar_widget)
@@ -210,6 +234,14 @@ class MainWindow(QMainWindow):
         
         # 状态栏
         self._create_statusbar()
+        
+        # 所有UI组件创建完成后，建立连接
+        self.setup_connections()
+    
+    def _refresh_tab_buttons(self):
+        """刷新Tab按钮显示"""
+        for btn in self.tab_buttons:
+            btn.update()
     
     def _on_vertical_tab_button_clicked(self, button):
         """垂直Tab按钮点击事件"""
@@ -221,45 +253,59 @@ class MainWindow(QMainWindow):
     
     def _create_pages(self):
         """创建各个操作页面"""
-        # 页面0: 准备视频
+        # 页面0: 视频生成 (I2V)
+        page_i2v = self._create_i2v_page()
+        self.page_stack.addWidget(page_i2v)
+        
+        # 页面1: 准备视频
         page0 = self._create_video_page()
         self.page_stack.addWidget(page0)
         
-        # 页面1: 动作分析
+        # 页面2: 动作分析
         page1 = self._create_pose_page()
         self.page_stack.addWidget(page1)
         
-        # 页面2: 批量缩放
+        # 页面3: 批量缩放
         page2 = self._create_scale_page()
         self.page_stack.addWidget(page2)
         
-        # 页面3: 背景处理
+        # 页面4: 背景处理
         page3 = self._create_background_page()
         self.page_stack.addWidget(page3)
         
-        # 页面4: 边缘优化
+        # 页面5: 边缘优化
         page4 = self._create_edge_page()
         self.page_stack.addWidget(page4)
         
-        # 页面5: 描边
+        # 页面6: 描边
         page5 = self._create_outline_page()
         self.page_stack.addWidget(page5)
         
-        # 页面6: 空白裁剪
+        # 页面7: 空白裁剪
         page6 = self._create_crop_page()
         self.page_stack.addWidget(page6)
         
-        # 页面7: 图像增强
+        # 页面8: 图像增强
         page7 = self._create_enhance_page()
         self.page_stack.addWidget(page7)
         
-        # 页面8: 导出
+        # 页面9: 导出
         page8 = self._create_export_page()
         self.page_stack.addWidget(page8)
+        # 注意：setup_connections 移到 _create_center_panel 之后调用
+    
+    def _create_i2v_page(self) -> QWidget:
+        """创建视频生成页面"""
+        self.i2v_panel = I2VPanel()
+        # 连接信号
+        self.i2v_panel.video_generated.connect(self._on_i2v_video_generated)
+        self.i2v_panel.status_changed.connect(self._on_i2v_status_changed)
+        return self.i2v_panel
     
     def _create_video_page(self) -> QWidget:
         """创建准备视频页面"""
         page = QWidget()
+        page.setMaximumHeight(300)  # 限制高度，避免不必要的滚动条
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(15)
@@ -325,6 +371,7 @@ class MainWindow(QMainWindow):
     def _create_scale_page(self) -> QWidget:
         """创建批量缩放页面"""
         page = QWidget()
+        page.setMaximumHeight(350)
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(15)
@@ -415,6 +462,7 @@ class MainWindow(QMainWindow):
     def _create_pose_page(self) -> QWidget:
         """创建动作分析页面"""
         page = QWidget()
+        page.setMaximumHeight(400)
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(15)
@@ -486,6 +534,7 @@ class MainWindow(QMainWindow):
     def _create_background_page(self) -> QWidget:
         """创建背景处理页面"""
         page = QWidget()
+        page.setMaximumHeight(400)
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(15)
@@ -908,6 +957,9 @@ class MainWindow(QMainWindow):
         video_layout.addWidget(self.video_player)
         self.tab_widget.addTab(video_tab, "视频预览")
         
+        # 启动性能监控定时器
+        self.performance_timer.start(1000)
+        
         # 帧管理Tab
         frame_tab = QWidget()
         frame_layout = QVBoxLayout(frame_tab)
@@ -963,6 +1015,10 @@ class MainWindow(QMainWindow):
     
     def update_performance_stats(self):
         """更新性能统计信息"""
+        # 安全检查：确保 video_player 存在且已初始化
+        if not hasattr(self, 'video_player') or self.video_player is None:
+            return
+            
         if hasattr(self.video_player, 'get_performance_stats'):
             stats = self.video_player.get_performance_stats()
             avg_time = stats['average_frame_display_time'] * 1000  # 转换为毫秒
@@ -974,6 +1030,10 @@ class MainWindow(QMainWindow):
     
     def reset_performance_stats(self):
         """重置性能统计信息"""
+        # 安全检查
+        if not hasattr(self, 'video_player') or self.video_player is None:
+            return
+            
         if hasattr(self.video_player, 'reset_performance_stats'):
             self.video_player.reset_performance_stats()
             self.performance_label.setText("性能: 就绪")
@@ -2799,6 +2859,49 @@ class MainWindow(QMainWindow):
         
         dialog.exec()
     
+    @Slot(str)
+    def _on_i2v_video_generated(self, video_path: str):
+        """I2V视频生成完成处理"""
+        # 自动加载生成的视频
+        self._load_generated_video(video_path)
+    
+    @Slot(str)
+    def _on_i2v_status_changed(self, status: str):
+        """I2V状态更新处理"""
+        self.statusBar().showMessage(status)
+    
+    def _load_generated_video(self, video_path: str):
+        """加载生成的视频到处理流程"""
+        from pathlib import Path
+        if Path(video_path).exists():
+            # 设置视频路径并自动切换到准备视频页面
+            self._video_path = video_path
+            self.video_path_label.setText(Path(video_path).name)
+            
+            # 加载视频信息
+            self._video_info = self._video_processor.get_video_info(video_path)
+            if self._video_info:
+                self.video_info_label.setText(
+                    f"分辨率: {self._video_info.width}x{self._video_info.height} | "
+                    f"时长: {self._video_info.duration:.1f}s | "
+                    f"帧率: {self._video_info.fps:.1f}fps"
+                )
+                
+                # 更新视频播放器
+                self.video_player.load_video(video_path)
+                
+                # 更新时间线
+                self.timeline.set_duration(self._video_info.duration)
+                
+                # 启用抽帧按钮
+                self.extract_btn.setEnabled(True)
+                
+                # 切换到准备视频页面
+                self.page_stack.setCurrentIndex(1)
+                self.tab_buttons[1].setChecked(True)
+                
+                self.statusBar().showMessage(f"已加载生成的视频: {Path(video_path).name}")
+    
     def closeEvent(self, event):
         """关闭事件"""
         # 停止所有工作线程
@@ -2815,6 +2918,7 @@ class MainWindow(QMainWindow):
             self._pose_worker.wait()
         
         # 释放资源
-        self.video_player.release()
+        if hasattr(self, 'video_player'):
+            self.video_player.release()
         
         event.accept()
