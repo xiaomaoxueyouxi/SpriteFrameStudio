@@ -74,8 +74,9 @@ class VerticalTabButton(QPushButton):
         # 计算总高度
         total_height = char_height * len(text)
         
-        # 垂直居中计算（考虑按钮的实际尺寸）
-        start_y = max(5, min(self.height() - total_height - 5, (self.height() - total_height) / 2 + font_metrics.ascent()))
+        # 垂直居中：文本块中心对齐按钮中心
+        # drawText 的 y 参数是基线位置，所以需要加上 ascent
+        start_y = (self.height() - total_height) / 2 + font_metrics.ascent()
         
         # 逐字绘制
         x = self.width() / 2
@@ -83,6 +84,10 @@ class VerticalTabButton(QPushButton):
             char_width = font_metrics.horizontalAdvance(char)
             y = start_y + i * char_height
             painter.drawText(int(x - char_width / 2), int(y), char)
+        
+        # 底部分割线
+        painter.setPen(QColor("#333333"))
+        painter.drawLine(8, self.height() - 1, self.width() - 8, self.height() - 1)
     
     def resizeEvent(self, event):
         """大小改变时重绘"""
@@ -180,7 +185,6 @@ class MainWindow(QMainWindow):
         # 窗口显示后刷新按钮布局
         QTimer.singleShot(100, self._refresh_tab_buttons)
         
-        tab_bar_layout.addStretch()
         main_layout.addWidget(self.vertical_tab_bar)
         
         # ===== 中间：操作面板 =====
