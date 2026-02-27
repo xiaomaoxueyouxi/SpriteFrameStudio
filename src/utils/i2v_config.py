@@ -39,7 +39,7 @@ AVAILABLE_LORAS = [
     "wan-nsfw-e14-fixed.safetensors",
 ]
 
-# 分辨率预设
+# 分辨率预设（原项目默认480x832）
 RESOLUTION_PRESETS = [
     ("480p (480x832)", 480, 832),
     ("480p 横版 (832x480)", 832, 480),

@@ -223,12 +223,12 @@ class I2VWorker(QThread):
             log(f"❌ 生成过程出错: {str(e)}")
             self.error.emit(f"生成过程出错: {str(e)}")
     
-    def _wait_for_completion(self, timeout: int = 600) -> Optional[str]:
+    def _wait_for_completion(self, timeout: int = 3600) -> Optional[str]:
         """
         等待生成完成
         
         Args:
-            timeout: 超时时间（秒）
+            timeout: 超时时间（秒），默认1小时
             
         Returns:
             生成的视频路径，失败返回None
