@@ -2877,34 +2877,41 @@ class MainWindow(QMainWindow):
     def _load_generated_video(self, video_path: str):
         """加载生成的视频到处理流程"""
         from pathlib import Path
-        if Path(video_path).exists():
-            # 设置视频路径并自动切换到准备视频页面
-            self._video_path = video_path
-            self.video_path_label.setText(Path(video_path).name)
+        if not Path(video_path).exists():
+            return
+        
+        # 复用正常的视频加载流程
+        self._video_info = self.video_player.load_video(video_path)
+        
+        if self._video_info:
+            filename = Path(video_path).name
+            self.video_path_label.setText(filename)
+            self.video_path_label.setToolTip(filename)
+            self.video_info_label.setText(
+                f"分辨率: {self._video_info.resolution}\n"
+                f"帧率: {self._video_info.fps:.2f} fps\n"
+                f"时长: {self._video_info.format_duration()}"
+            )
             
-            # 加载视频信息
-            self._video_info = self._video_processor.get_video_info(video_path)
-            if self._video_info:
-                self.video_info_label.setText(
-                    f"分辨率: {self._video_info.width}x{self._video_info.height} | "
-                    f"时长: {self._video_info.duration:.1f}s | "
-                    f"帧率: {self._video_info.fps:.1f}fps"
-                )
-                
-                # 更新视频播放器
-                self.video_player.load_video(video_path)
-                
-                # 更新时间线
-                self.timeline.set_duration(self._video_info.duration)
-                
-                # 启用抽帧按钮
-                self.extract_btn.setEnabled(True)
-                
-                # 切换到准备视频页面
-                self.page_stack.setCurrentIndex(1)
-                self.tab_buttons[1].setChecked(True)
-                
-                self.statusBar().showMessage(f"已加载生成的视频: {Path(video_path).name}")
+            # 设置时间轴
+            self.timeline.set_duration(self._video_info.duration)
+            self.timeline.set_fps(self._video_info.fps)
+            self.video_player.set_playback_range(*self.timeline.get_range())
+            self.video_player.set_range_playback_enabled(self.range_play_check.isChecked())
+            
+            # 启用功能
+            self.extract_btn.setEnabled(True)
+            self.fps_spin.setValue(self._video_info.fps)
+            
+            # 清空旧数据
+            self._frame_manager.clear()
+            self.frame_preview.clear()
+            
+            # 切换到准备视频页面
+            self.page_stack.setCurrentIndex(1)
+            self.tab_buttons[1].setChecked(True)
+            
+            self.statusBar().showMessage(f"已加载生成的视频: {filename}")
     
     def closeEvent(self, event):
         """关闭事件"""

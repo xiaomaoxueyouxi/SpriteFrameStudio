@@ -157,8 +157,13 @@ class ComfyUIClient:
         # 节点6: 正向提示词
         workflow["6"]["inputs"]["text"] = positive_prompt
         
-        # 节点7: 负向提示词
-        workflow["7"]["inputs"]["text"] = negative_prompt
+        # 节点7: 负向提示词（原项目逻辑：默认与正向相同）
+        actual_negative = negative_prompt if negative_prompt else positive_prompt
+        workflow["7"]["inputs"]["text"] = actual_negative
+        
+        # 保留cfg值不修改（模板默认3.5）
+        # workflow["101"]["inputs"]["cfg"] = 3.5
+        # workflow["102"]["inputs"]["cfg"] = 3.5
         
         # 节点83: 帧数和尺寸
         workflow["83"]["inputs"]["length"] = frames
@@ -171,10 +176,37 @@ class ComfyUIClient:
         workflow["102"]["inputs"]["steps"] = steps
         
         # 节点111, 112: LoRA配置
-        workflow["111"]["inputs"]["lora_name"] = lora_name
-        workflow["111"]["inputs"]["strength_model"] = lora_strength
-        workflow["112"]["inputs"]["lora_name"] = lora_name
-        workflow["112"]["inputs"]["strength_model"] = lora_strength
+        # 如果不选择风格LoRA，将强度设为0（跳过风格LoRA）
+        if lora_name and lora_name != "(无风格LoRA)":
+            workflow["111"]["inputs"]["lora_name"] = lora_name
+            workflow["111"]["inputs"]["strength_model"] = lora_strength
+            workflow["112"]["inputs"]["lora_name"] = lora_name
+            workflow["112"]["inputs"]["strength_model"] = lora_strength
+        else:
+            # 不使用风格LoRA，强度设为0
+            workflow["111"]["inputs"]["strength_model"] = 0
+            workflow["112"]["inputs"]["strength_model"] = 0
+            lora_name = "(无)"
+        
+        # 调试：打印关键参数
+        log(f"工作流参数:")
+        log(f"  首帧: {start_image_name}, 尾帧: {actual_end_image}")
+        log(f"  分辨率: {width}x{height}, 帧数: {frames}, 步数: {steps}")
+        log(f"  种子: {actual_seed}")
+        log(f"  正向提示词: {positive_prompt[:50]}..." if len(positive_prompt) > 50 else f"  正向提示词: {positive_prompt}")
+        log(f"  负向提示词: {actual_negative[:50]}..." if len(actual_negative) > 50 else f"  负向提示词: {actual_negative}")
+        log(f"  风格LoRA: {lora_name}")
+        log(f"  风格LoRA(节点111): {workflow['111']['inputs']['lora_name']} (强度: {workflow['111']['inputs']['strength_model']})")
+        log(f"  风格LoRA(节点112): {workflow['112']['inputs']['lora_name']} (强度: {workflow['112']['inputs']['strength_model']})")
+        log(f"  基础LoRA(节点94): {workflow['94']['inputs']['lora_name']} (强度: {workflow['94']['inputs']['strength_model']})")
+        log(f"  基础LoRA(节点95): {workflow['95']['inputs']['lora_name']} (强度: {workflow['95']['inputs']['strength_model']})")
+        
+        # 保存实际提交的工作流供调试
+        import json
+        debug_path = Path(__file__).parent.parent.parent / "debug_workflow.json"
+        with open(debug_path, 'w', encoding='utf-8') as f:
+            json.dump(workflow, f, ensure_ascii=False, indent=2)
+        log(f"调试: 工作流已保存到 {debug_path}")
         
         return workflow
     
@@ -290,8 +322,7 @@ class ComfyUIClient:
     def stop_ws_listener(self):
         """停止WebSocket监听"""
         self._running = False
-        if self._ws:
-            asyncio.run(self._ws.close())
+        self._ws = None
     
     async def _ws_listen(self):
         """WebSocket监听协程"""

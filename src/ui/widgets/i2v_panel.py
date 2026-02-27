@@ -193,21 +193,13 @@ class I2VPanel(QWidget):
         prompt_group = QGroupBox("提示词")
         prompt_layout = QVBoxLayout(prompt_group)
         
-        # 正向提示词
-        prompt_layout.addWidget(QLabel("正向提示词:"))
+        # 提示词
+        prompt_layout.addWidget(QLabel("提示词:"))
         self.positive_prompt_edit = QTextEdit()
         self.positive_prompt_edit.setPlaceholderText("描述你想要生成的视频内容...")
         self.positive_prompt_edit.setText(DEFAULT_POSITIVE_PROMPT)
         self.positive_prompt_edit.setMaximumHeight(60)
         prompt_layout.addWidget(self.positive_prompt_edit)
-        
-        # 负向提示词
-        prompt_layout.addWidget(QLabel("负向提示词:"))
-        self.negative_prompt_edit = QTextEdit()
-        self.negative_prompt_edit.setPlaceholderText("描述你不想要的内容...")
-        self.negative_prompt_edit.setText(DEFAULT_NEGATIVE_PROMPT)
-        self.negative_prompt_edit.setMaximumHeight(60)
-        prompt_layout.addWidget(self.negative_prompt_edit)
         
         layout.addWidget(prompt_group)
         
@@ -287,7 +279,7 @@ class I2VPanel(QWidget):
         lora_row = QHBoxLayout()
         lora_row.addWidget(QLabel("LoRA模型:"))
         self.lora_combo = QComboBox()
-        self.lora_combo.addItem(DEFAULT_LORA_NAME)
+        self.lora_combo.addItem("(无风格LoRA)")  # 默认选项
         self._refresh_loras()  # 异步刷新LoRA列表
         lora_row.addWidget(self.lora_combo, 1)
         self.refresh_lora_btn = QPushButton("🔄")
@@ -361,14 +353,19 @@ class I2VPanel(QWidget):
     def _refresh_loras(self):
         """刷新LoRA列表"""
         loras = self._client.get_loras()
+        current = self.lora_combo.currentText()
+        self.lora_combo.clear()
+        # 先添加"无"选项
+        self.lora_combo.addItem("(无风格LoRA)")
         if loras:
-            current = self.lora_combo.currentText()
-            self.lora_combo.clear()
             self.lora_combo.addItems(loras)
-            # 恢复之前的选择
-            idx = self.lora_combo.findText(current)
-            if idx >= 0:
-                self.lora_combo.setCurrentIndex(idx)
+        # 恢复之前的选择
+        idx = self.lora_combo.findText(current)
+        if idx >= 0:
+            self.lora_combo.setCurrentIndex(idx)
+        else:
+            # 默认选择"无"
+            self.lora_combo.setCurrentIndex(0)
     
     def _get_resolution(self) -> tuple:
         """获取当前分辨率设置"""
@@ -410,7 +407,7 @@ class I2VPanel(QWidget):
             end_image_path=end_image_path,
             mode=mode,
             positive_prompt=self.positive_prompt_edit.toPlainText(),
-            negative_prompt=self.negative_prompt_edit.toPlainText(),
+            negative_prompt="",  # 不使用负向提示词
             width=width,
             height=height,
             frames=self.frames_spin.value(),
@@ -459,7 +456,6 @@ class I2VPanel(QWidget):
         """生成完成"""
         self._reset_ui()
         self.status_changed.emit(f"视频生成完成: {video_path}")
-        self.video_generated.emit(video_path)
         
         # 询问是否导入视频
         reply = QMessageBox.question(
@@ -470,7 +466,7 @@ class I2VPanel(QWidget):
         )
         if reply == QMessageBox.Yes:
             # 发送信号让主窗口处理
-            pass
+            self.video_generated.emit(video_path)
     
     @Slot(str)
     def _on_error(self, error_msg: str):

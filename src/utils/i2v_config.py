@@ -16,34 +16,34 @@ GENERATION_MODE_FLF2V = "flf2v"  # 首尾帧
 WORKFLOWS_DIR = Path(__file__).parent.parent.parent / "workflows"
 WORKFLOW_TEMPLATE_PATH = WORKFLOWS_DIR / "WAN_2.2_FLF2V_lora.json"
 
-# 默认生成参数
-DEFAULT_WIDTH = 360
-DEFAULT_HEIGHT = 704
-DEFAULT_FRAMES = 49  # 帧数
+# 默认生成参数（与原工作流模板一致）
+DEFAULT_WIDTH = 480
+DEFAULT_HEIGHT = 832
+DEFAULT_FRAMES = 49  # 帧数（原项目默认49帧）
 DEFAULT_STEPS = 6
 DEFAULT_SEED = -1  # -1表示随机
 
-# 默认提示词
-DEFAULT_POSITIVE_PROMPT = "女人正在走猫步,catwalk"
-DEFAULT_NEGATIVE_PROMPT = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
+# 默认提示词（原项目正负向提示词相同）
+DEFAULT_POSITIVE_PROMPT = ""
+DEFAULT_NEGATIVE_PROMPT = ""  # 与正向提示词保持一致
 
 # LoRA默认配置
-DEFAULT_LORA_NAME = "catwalk.safetensors"
+DEFAULT_LORA_NAME = ""  # 空字符串表示不使用风格LoRA
 DEFAULT_LORA_STRENGTH = 1.0
 
 # 可用的LoRA模型列表（从ComfyUI动态获取）
-# 这里是预设列表，实际运行时会从服务器获取
+# 空字符串表示不使用风格LoRA
 AVAILABLE_LORAS = [
+    "(无风格LoRA)",
     "catwalk.safetensors",
-    "lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors",
     "wan-nsfw-e14-fixed.safetensors",
 ]
 
 # 分辨率预设
 RESOLUTION_PRESETS = [
-    ("480p (360x704)", 360, 704),
-    ("480p 横版 (704x360)", 704, 360),
-    ("720p (540x1056)", 540, 1056),
+    ("480p (480x832)", 480, 832),
+    ("480p 横版 (832x480)", 832, 480),
+    ("360p (360x640)", 360, 640),
     ("自定义", None, None),
 ]
 

@@ -254,72 +254,31 @@ class I2VWorker(QThread):
                 # 检查是否完成
                 outputs = prompt_history.get('outputs', {})
                 if outputs:
-                    # 调试：打印 outputs 内容
-                    log(f"✓ 任务执行完成，outputs 节点: {list(outputs.keys())}")
+                    log(f"✓ 任务执行完成")
                     
-                    # 查找视频输出
-                    for node_id, node_output in outputs.items():
-                        log(f"  节点 {node_id} 输出类型: {list(node_output.keys())}")
-                        videos = node_output.get('videos', [])
-                        images = node_output.get('images', [])
-                        animated = node_output.get('animated', [])
-                        
-                        # 优先处理视频输出
-                        if videos:
-                            video_info = videos[0]
-                            filename = video_info.get('filename')
-                            log(f"  找到视频: {filename}")
+                    # 直接从ComfyUI输出目录找最新视频
+                    comfyui_output = Path("d:/Users/dhw/WAN2.2/wan2.2first/wan2.2-14B-I2V/ComfyUI/output")
+                    if comfyui_output.exists():
+                        # 找最新的mp4文件
+                        mp4_files = list(comfyui_output.glob("*.mp4"))
+                        if mp4_files:
+                            latest = max(mp4_files, key=lambda f: f.stat().st_mtime)
+                            log(f"找到视频: {latest.name}")
                             
-                            if filename:
-                                log(f"正在下载视频: {filename}")
-                                video_data = self._client.get_output_video(
-                                    filename,
-                                    video_info.get('type', 'output')
-                                )
-                                if video_data:
-                                    if self.output_dir:
-                                        save_path = Path(self.output_dir) / filename
-                                    else:
-                                        save_path = Path(self.start_image_path).parent / filename
-                                    
-                                    save_path.parent.mkdir(parents=True, exist_ok=True)
-                                    with open(save_path, 'wb') as f:
-                                        f.write(video_data)
-                                    
-                                    log(f"✓ 视频已保存 ({len(video_data) / 1024 / 1024:.2f} MB)")
-                                    return str(save_path)
-                                else:
-                                    log("❌ 下载视频失败")
-                        
-                        # 处理 animated 输出 (GIF/WebP动画)
-                        elif animated:
-                            anim_info = animated[0]
-                            filename = anim_info.get('filename')
-                            log(f"  找到动画: {filename}")
+                            # 复制到输出目录
+                            if self.output_dir:
+                                save_path = Path(self.output_dir) / latest.name
+                            else:
+                                save_path = Path(self.start_image_path).parent / latest.name
                             
-                            if filename:
-                                log(f"正在下载动画: {filename}")
-                                anim_data = self._client.get_output_video(
-                                    filename,
-                                    anim_info.get('type', 'output')
-                                )
-                                if anim_data:
-                                    if self.output_dir:
-                                        save_path = Path(self.output_dir) / filename
-                                    else:
-                                        save_path = Path(self.start_image_path).parent / filename
-                                    
-                                    save_path.parent.mkdir(parents=True, exist_ok=True)
-                                    with open(save_path, 'wb') as f:
-                                        f.write(anim_data)
-                                    
-                                    log(f"✓ 动画已保存 ({len(anim_data) / 1024 / 1024:.2f} MB)")
-                                    return str(save_path)
-                                else:
-                                    log("❌ 下载动画失败")
-                        
-                        elif images:
-                            log(f"  节点 {node_id} 输出的是静态图片")
+                            save_path.parent.mkdir(parents=True, exist_ok=True)
+                            import shutil
+                            shutil.copy2(latest, save_path)
+                            
+                            log(f"✓ 视频已保存: {save_path}")
+                            return str(save_path)
+                    
+                    log("❌ 未找到输出视频")
             
             # 更新进度（模拟）
             elapsed = int(time.time() - start_time)
