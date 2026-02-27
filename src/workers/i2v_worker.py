@@ -34,6 +34,10 @@ class I2VWorker(QThread):
         self._client = ComfyUIClient()
         self._cancelled = False
         
+        # WebSocket进度跟踪
+        self._ws_progress = {}  # {node_id: (current, total)}
+        self._current_node = None
+        
         # 生成参数
         self.mode: str = GENERATION_MODE_I2V
         self.start_image_path: str = ""
@@ -82,6 +86,20 @@ class I2VWorker(QThread):
         self.lora_name = lora_name or DEFAULT_LORA_NAME
         self.lora_strength = lora_strength if lora_strength is not None else DEFAULT_LORA_STRENGTH
         self.output_dir = output_dir
+    
+    def _on_ws_progress(self, current: int, total: int, node_id: str):
+        """WebSocket进度回调"""
+        if node_id:
+            self._ws_progress[node_id] = (current, total)
+            self._current_node = node_id
+            progress_pct = int(current / total * 100) if total > 0 else 0
+            log(f"  节点 {node_id}: {current}/{total} ({progress_pct}%)")
+            self.progress.emit(current, total, f"节点 {node_id}: {progress_pct}%")
+    
+    def _on_ws_status(self, status: str):
+        """WebSocket状态回调"""
+        log(f"  [ComfyUI] {status}")
+        self.status_changed.emit(status)
     
     def run(self):
         """执行视频生成"""
@@ -165,6 +183,13 @@ class I2VWorker(QThread):
             # 5. 提交工作流
             log("[步骤5/6] 提交工作流到ComfyUI队列...")
             self.status_changed.emit("正在提交任务...")
+            
+            # 启动WebSocket监听获取实时进度
+            self._client.start_ws_listener(
+                progress_callback=self._on_ws_progress,
+                status_callback=self._on_ws_status
+            )
+            
             self._prompt_id = self._client.queue_prompt(workflow)
             if not self._prompt_id:
                 log("❌ 提交工作流失败")
@@ -182,16 +207,19 @@ class I2VWorker(QThread):
             video_path = self._wait_for_completion()
             
             if video_path:
+                self._client.stop_ws_listener()
                 log("=" * 50)
                 log(f"✓ 视频生成成功!")
                 log(f"保存路径: {video_path}")
                 log("=" * 50)
                 self.finished.emit(video_path, self._prompt_id)
             elif not self._cancelled:
+                self._client.stop_ws_listener()
                 log("❌ 获取生成结果失败")
                 self.error.emit("获取生成结果失败")
                 
         except Exception as e:
+            self._client.stop_ws_listener()
             log(f"❌ 生成过程出错: {str(e)}")
             self.error.emit(f"生成过程出错: {str(e)}")
     
@@ -226,25 +254,29 @@ class I2VWorker(QThread):
                 # 检查是否完成
                 outputs = prompt_history.get('outputs', {})
                 if outputs:
-                    log(f"✓ 任务执行完成，正在获取输出文件...")
+                    # 调试：打印 outputs 内容
+                    log(f"✓ 任务执行完成，outputs 节点: {list(outputs.keys())}")
+                    
                     # 查找视频输出
                     for node_id, node_output in outputs.items():
+                        log(f"  节点 {node_id} 输出类型: {list(node_output.keys())}")
                         videos = node_output.get('videos', [])
+                        images = node_output.get('images', [])
+                        animated = node_output.get('animated', [])
+                        
+                        # 优先处理视频输出
                         if videos:
                             video_info = videos[0]
                             filename = video_info.get('filename')
-                            subfolder = video_info.get('subfolder', '')
+                            log(f"  找到视频: {filename}")
                             
                             if filename:
-                                log(f"找到视频文件: {filename}")
-                                log("正在下载视频...")
-                                # 下载视频
+                                log(f"正在下载视频: {filename}")
                                 video_data = self._client.get_output_video(
                                     filename,
                                     video_info.get('type', 'output')
                                 )
                                 if video_data:
-                                    # 保存到本地
                                     if self.output_dir:
                                         save_path = Path(self.output_dir) / filename
                                     else:
@@ -258,6 +290,36 @@ class I2VWorker(QThread):
                                     return str(save_path)
                                 else:
                                     log("❌ 下载视频失败")
+                        
+                        # 处理 animated 输出 (GIF/WebP动画)
+                        elif animated:
+                            anim_info = animated[0]
+                            filename = anim_info.get('filename')
+                            log(f"  找到动画: {filename}")
+                            
+                            if filename:
+                                log(f"正在下载动画: {filename}")
+                                anim_data = self._client.get_output_video(
+                                    filename,
+                                    anim_info.get('type', 'output')
+                                )
+                                if anim_data:
+                                    if self.output_dir:
+                                        save_path = Path(self.output_dir) / filename
+                                    else:
+                                        save_path = Path(self.start_image_path).parent / filename
+                                    
+                                    save_path.parent.mkdir(parents=True, exist_ok=True)
+                                    with open(save_path, 'wb') as f:
+                                        f.write(anim_data)
+                                    
+                                    log(f"✓ 动画已保存 ({len(anim_data) / 1024 / 1024:.2f} MB)")
+                                    return str(save_path)
+                                else:
+                                    log("❌ 下载动画失败")
+                        
+                        elif images:
+                            log(f"  节点 {node_id} 输出的是静态图片")
             
             # 更新进度（模拟）
             elapsed = int(time.time() - start_time)
@@ -278,6 +340,7 @@ class I2VWorker(QThread):
         self._cancelled = True
         if self._prompt_id:
             self._client.interrupt()
+        self._client.stop_ws_listener()
         self.status_changed.emit("已取消")
     
     def get_client(self) -> ComfyUIClient:
