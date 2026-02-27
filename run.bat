@@ -6,6 +6,9 @@ title SpriteFrameStudio
 
 cd /d %~dp0
 
+REM Disable user site-packages to avoid conflicts
+set "PYTHONNOUSERSITE=1"
+
 echo.
 echo ==========================================
 echo   SpriteFrameStudio - Starting
