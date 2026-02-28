@@ -21,7 +21,7 @@ from src.ui.widgets.pose_viewer import PoseViewer
 from src.ui.widgets.export_dialog import ExportDialog
 from src.ui.widgets.animation_preview import AnimationPreview
 from src.ui.widgets.history_panel import HistoryPanel
-from src.ui.widgets.i2v_panel import I2VPanel
+from src.ui.widgets.smoothmix_panel import SmoothMixPanel
 
 from src.core.video_processor import VideoProcessor
 from src.core.frame_manager import FrameManager
@@ -142,9 +142,44 @@ class MainWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
-        main_layout = QHBoxLayout(central_widget)
+        # 顶层布局：顶部Tab + 主内容区
+        root_layout = QVBoxLayout(central_widget)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+        
+        # ===== 顶部横向Tab =====
+        self.top_tab_widget = QTabWidget()
+        self.top_tab_widget.setStyleSheet("""
+            QTabWidget::pane { border: none; }
+            QTabBar::tab {
+                background-color: #1e1e1e;
+                color: #888;
+                padding: 8px 20px;
+                border: none;
+                border-bottom: 2px solid transparent;
+            }
+            QTabBar::tab:selected {
+                color: #fff;
+                border-bottom: 2px solid #0078d4;
+            }
+            QTabBar::tab:hover {
+                color: #fff;
+            }
+        """)
+        root_layout.addWidget(self.top_tab_widget)
+        
+        # Tab1: 帧处理（现有功能）
+        frame_process_widget = QWidget()
+        main_layout = QHBoxLayout(frame_process_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
+        self.top_tab_widget.addTab(frame_process_widget, "帧处理")
+        
+        # Tab2: SmoothMix视频生成
+        self.smoothmix_panel = SmoothMixPanel()
+        self.smoothmix_panel.video_generated.connect(self._on_i2v_video_generated)
+        self.smoothmix_panel.status_changed.connect(self._on_i2v_status_changed)
+        self.top_tab_widget.addTab(self.smoothmix_panel, "视频生成")
         
         # ===== 左侧：垂直Tab栏 =====
         self.vertical_tab_bar = QWidget()
@@ -162,7 +197,7 @@ class MainWindow(QMainWindow):
         tab_bar_layout.setSpacing(0)
         
         # 创建垂直Tab按钮
-        tab_names = ["视频生成", "准备视频", "动作分析", "批量缩放", "背景处理", "边缘优化", "描边", "空白裁剪", "图像增强", "导出"]
+        tab_names = ["准备视频", "动作分析", "批量缩放", "背景处理", "边缘优化", "描边", "空白裁剪", "图像增强", "导出"]
         
         # 创建按钮组实现互斥选择
         self.tab_button_group = QButtonGroup()
@@ -257,15 +292,11 @@ class MainWindow(QMainWindow):
     
     def _create_pages(self):
         """创建各个操作页面"""
-        # 页面0: 视频生成 (I2V)
-        page_i2v = self._create_i2v_page()
-        self.page_stack.addWidget(page_i2v)
-        
-        # 页面1: 准备视频
+        # 页面0: 准备视频
         page0 = self._create_video_page()
         self.page_stack.addWidget(page0)
         
-        # 页面2: 动作分析
+        # 页面1: 动作分析
         page1 = self._create_pose_page()
         self.page_stack.addWidget(page1)
         
@@ -297,14 +328,6 @@ class MainWindow(QMainWindow):
         page8 = self._create_export_page()
         self.page_stack.addWidget(page8)
         # 注意：setup_connections 移到 _create_center_panel 之后调用
-    
-    def _create_i2v_page(self) -> QWidget:
-        """创建视频生成页面"""
-        self.i2v_panel = I2VPanel()
-        # 连接信号
-        self.i2v_panel.video_generated.connect(self._on_i2v_video_generated)
-        self.i2v_panel.status_changed.connect(self._on_i2v_status_changed)
-        return self.i2v_panel
     
     def _create_video_page(self) -> QWidget:
         """创建准备视频页面"""

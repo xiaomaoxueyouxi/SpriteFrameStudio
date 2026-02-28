@@ -32,22 +32,32 @@ if exist "!PORTABLE_ENV!\python.exe" (
 REM ========== Conda Mode ==========
 set "CONDA_PATH=E:\software\miniconda3"
 
-echo Portable environment not found, using Conda...
+echo Portable environment not found, checking Conda...
 echo.
 
-echo Checking Conda path...
+REM Check if Conda exists
 if not exist "!CONDA_PATH!\condabin\conda.bat" (
-    echo Error: Conda not found at !CONDA_PATH!
-    echo Please check your Miniconda installation path
+    echo Conda not found, trying to use portable python_env...
     echo.
-    echo How to fix:
-    echo 1. Open Anaconda Prompt or Miniconda command line
-    echo 2. Run: echo %%CONDA_PREFIX%%
-    echo 3. Copy the path
-    echo 4. Edit run.bat with the correct path
-    echo.
-    pause
-    exit /b 1
+    
+    REM Try portable environment in portable_output folder
+    set "PORTABLE_ENV=%~dp0portable_output\SpriteFrameStudio\python_env"
+    if exist "!PORTABLE_ENV!\python.exe" (
+        echo Found portable Python environment at: !PORTABLE_ENV!
+        set "PATH=!PORTABLE_ENV!;!PORTABLE_ENV!\Library\bin;!PORTABLE_ENV!\Scripts;!PATH!"
+        set "PYTHONHOME=!PORTABLE_ENV!"
+        set "PYTHONPATH=%~dp0src"
+        echo.
+        echo Starting application...
+        "!PORTABLE_ENV!\python.exe" src/main.py
+        pause
+        exit /b 0
+    ) else (
+        echo Error: No Python environment found!
+        echo Neither Conda nor portable python_env is available.
+        pause
+        exit /b 1
+    )
 )
 
 echo Found Conda at: !CONDA_PATH!
@@ -56,13 +66,26 @@ echo.
 echo Activating spriteframe environment...
 call "!CONDA_PATH!\condabin\conda.bat" activate spriteframe
 if errorlevel 1 (
-    echo Error: Failed to activate environment spriteframe
+    echo Failed to activate spriteframe environment, trying portable python_env...
     echo.
-    echo Please run: "!CONDA_PATH!\condabin\conda.bat" env list
-    echo to see available environments
-    echo.
-    pause
-    exit /b 1
+    
+    REM Try portable environment if conda env activation fails
+    set "PORTABLE_ENV=%~dp0portable_output\SpriteFrameStudio\python_env"
+    if exist "!PORTABLE_ENV!\python.exe" (
+        echo Found portable Python environment at: !PORTABLE_ENV!
+        set "PATH=!PORTABLE_ENV!;!PORTABLE_ENV!\Library\bin;!PORTABLE_ENV!\Scripts;!PATH!"
+        set "PYTHONHOME=!PORTABLE_ENV!"
+        set "PYTHONPATH=%~dp0src"
+        echo.
+        echo Starting application...
+        "!PORTABLE_ENV!\python.exe" src/main.py
+        pause
+        exit /b 0
+    ) else (
+        echo Error: No Python environment found!
+        pause
+        exit /b 1
+    )
 )
 
 echo Environment activated successfully
