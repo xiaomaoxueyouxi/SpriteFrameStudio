@@ -118,12 +118,19 @@ class SmoothMixPanel(QWidget):
     
     video_generated = Signal(str)
     status_changed = Signal(str)
+    _connection_result = Signal(bool)  # 线程安全的连接结果信号
+    _log_signal = Signal(str)  # 线程安全的日志信号
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self._worker: Optional[SmoothMixWorker] = None
         self._comfyui_process = None
+        self._was_connected = None
         self._setup_ui()
+        
+        # 连接信号
+        self._connection_result.connect(self._update_connection_status)
+        self._log_signal.connect(self._do_log)
         
         self._connection_timer = QTimer(self)
         self._connection_timer.timeout.connect(self._check_connection)
@@ -145,7 +152,7 @@ class SmoothMixPanel(QWidget):
         self.status_indicator.setStyleSheet("color: #ff4444; font-size: 18px;")
         status_layout.addWidget(self.status_indicator)
         
-        self.status_label = QLabel("ComfyUI (8189): 未连接")
+        self.status_label = QLabel("ComfyUI (8188): 未连接")
         self.status_label.setStyleSheet("font-size: 14px;")
         status_layout.addWidget(self.status_label)
         status_layout.addStretch()
@@ -341,7 +348,11 @@ class SmoothMixPanel(QWidget):
         layout.addLayout(bottom_layout)
     
     def _log(self, msg: str):
-        """添加日志"""
+        """添加日志（主线程调用）"""
+        self._do_log(msg)
+    
+    def _do_log(self, msg: str):
+        """实际写入日志"""
         from datetime import datetime
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.log_text.append(f"[{timestamp}] {msg}")
@@ -350,45 +361,43 @@ class SmoothMixPanel(QWidget):
         scrollbar.setValue(scrollbar.maximum())
     
     def _check_connection(self):
-        """异步检查连接，不阻塞UI"""
+        """异步检查连接"""
         from threading import Thread
         
-        def check_in_thread():
-            if not self._worker:
-                self._worker = SmoothMixWorker()
-            
-            connected = self._worker.check_connection()
-            # 回到主线程更新UI
-            QTimer.singleShot(0, lambda: self._update_connection_status(connected))
+        def do_check():
+            import requests
+            try:
+                r = requests.get("http://127.0.0.1:8188/system_stats", timeout=2)
+                self._connection_result.emit(r.status_code == 200)
+            except:
+                self._connection_result.emit(False)
         
-        Thread(target=check_in_thread, daemon=True).start()
+        Thread(target=do_check, daemon=True).start()
     
     def _update_connection_status(self, connected: bool):
         """更新连接状态UI（主线程）"""
+        # 只在状态变化时记录日志
         if connected:
             self.status_indicator.setStyleSheet("color: #44ff44; font-size: 16px;")
-            self.status_label.setText("ComfyUI (8189): 已连接")
+            self.status_label.setText("ComfyUI (8188): 已连接")
             self.start_btn.setVisible(False)
+            if self._was_connected != True:
+                self._log("ComfyUI 已连接")
         else:
             self.status_indicator.setStyleSheet("color: #ff4444; font-size: 16px;")
-            self.status_label.setText("ComfyUI (8189): 未连接")
+            self.status_label.setText("ComfyUI (8188): 未连接")
             self.start_btn.setVisible(True)
+        
+        self._was_connected = connected
     
     def _start_comfyui(self):
         import subprocess
-        import os
-        import threading
         
         base_path = Path(__file__).parent.parent.parent.parent / "portable_output" / "SpriteFrameStudio" / "Wan2.2-SmoothMix"
-        comfyui_path = base_path / "ComfyUI" / "main.py"
-        python_exe = base_path / "py312" / "python.exe"
+        start_bat = base_path / "start_comfyui.bat"
         
-        if not comfyui_path.exists():
-            QMessageBox.warning(self, "错误", f"找不到ComfyUI:\n{comfyui_path}")
-            return
-        
-        if not python_exe.exists():
-            QMessageBox.warning(self, "错误", f"找不到Python:\n{python_exe}")
+        if not start_bat.exists():
+            QMessageBox.warning(self, "错误", f"找不到启动脚本:\n{start_bat}")
             return
         
         # 显示硬件信息
@@ -402,56 +411,18 @@ class SmoothMixPanel(QWidget):
                 self._log(f"CUDA: {torch.version.cuda}")
             else:
                 self._log("未检测到CUDA GPU")
-        except:
-            self._log("无法检测GPU信息")
-        
-        # 设置环境变量
-        env = os.environ.copy()
-        env["PYTHONHOME"] = ""
-        env["PYTHONPATH"] = ""
-        env["TORCH_HOME"] = str(base_path / "cache")
-        env["HF_ENDPOINT"] = "https://hf-mirror.com"
-        env["HF_HOME"] = str(base_path / "hf_download")
-        
-        # 启动ComfyUI，端口8189
-        cmd = [
-            str(python_exe),
-            str(comfyui_path),
-            "--port", "8189",
-            "--listen", "127.0.0.1"
-        ]
+        except Exception as e:
+            self._log(f"硬件检测失败: {e}")
         
         try:
-            self._log("启动 ComfyUI (端口 8189)...")
-            process = subprocess.Popen(
-                cmd,
-                cwd=str(base_path / "ComfyUI"),
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+            self._log("启动 ComfyUI (端口 8188)...")
+            subprocess.Popen(
+                ["cmd", "/c", str(start_bat)],
+                cwd=str(base_path),
+                creationflags=subprocess.CREATE_NEW_CONSOLE
             )
-            self._comfyui_process = process
-            self.status_label.setText("ComfyUI (8189): 正在启动...")
-            
-            # 后台线程读取输出
-            def read_output():
-                for line in process.stdout:
-                    line = line.strip()
-                    if line:
-                        # 过滤关键信息
-                        if any(k in line.lower() for k in ['gpu', 'cuda', 'error', 'warning', 'starting', 'listening', 'loaded', 'model']):
-                            QTimer.singleShot(0, lambda l=line: self._log(l))
-                
-                QTimer.singleShot(0, lambda: self._log("ComfyUI 进程已退出"))
-            
-            thread = threading.Thread(target=read_output, daemon=True)
-            thread.start()
-            
-            QTimer.singleShot(8000, self._check_connection)
+            self.status_label.setText("ComfyUI (8188): 正在启动...")
+            self._log("请等待ComfyUI启动完成...")
         except Exception as e:
             self._log(f"启动失败: {e}")
             QMessageBox.warning(self, "启动失败", str(e))

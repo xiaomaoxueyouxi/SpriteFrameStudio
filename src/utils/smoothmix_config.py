@@ -1,9 +1,9 @@
 """SmoothMix视频生成配置"""
 from pathlib import Path
 
-# ComfyUI服务器配置 (端口8189，与I2V的8188区分)
+# ComfyUI服务器配置 (端口8188)
 COMFYUI_HOST = "127.0.0.1"
-COMFYUI_PORT = 8189
+COMFYUI_PORT = 8188
 COMFYUI_URL = f"http://{COMFYUI_HOST}:{COMFYUI_PORT}"
 COMFYUI_WS_URL = f"ws://{COMFYUI_HOST}:{COMFYUI_PORT}/ws"
 

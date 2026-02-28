@@ -8,9 +8,9 @@ from typing import Optional, Dict, List
 from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 import requests
-import websockets
-import asyncio
 import threading
+import asyncio
+import websockets
 
 
 def log(message: str):
@@ -60,8 +60,8 @@ class SmoothMixWorker(QThread):
         self._task_counter = 0
         self._ws = None
         self._running = False
-        self.base_url = "http://127.0.0.1:8189"
-        self.ws_url = "ws://127.0.0.1:8189/ws"
+        self.base_url = "http://127.0.0.1:8188"
+        self.ws_url = "ws://127.0.0.1:8188/ws"
         self.client_id = f"smoothmix_{random.randint(1000, 9999)}"
         self.output_dir = Path(__file__).parent.parent.parent.parent / "output" / "smoothmix"
         
@@ -191,51 +191,62 @@ class SmoothMixWorker(QThread):
             pass
     
     def _start_ws_listener(self):
+        """启动WebSocket监听"""
         self._running = True
-        def ws_loop():
+        
+        def ws_thread():
             asyncio.run(self._ws_listen())
-        self._ws_thread = threading.Thread(target=ws_loop, daemon=True)
+        
+        self._ws_thread = threading.Thread(target=ws_thread, daemon=True)
         self._ws_thread.start()
     
     def _stop_ws_listener(self):
         self._running = False
-        self._ws = None
     
     async def _ws_listen(self):
+        uri = f"{self.ws_url}?clientId={self.client_id}"
         try:
-            uri = f"{self.ws_url}?clientId={self.client_id}"
-            async with websockets.connect(uri) as ws:
-                self._ws = ws
+            async with websockets.connect(uri, compression=None) as ws:
+                log("WebSocket已连接，开始监听进度...")
                 while self._running:
                     try:
-                        message = await asyncio.wait_for(ws.recv(), timeout=1.0)
-                        data = json.loads(message)
-                        await self._handle_ws_message(data)
+                        msg = await asyncio.wait_for(ws.recv(), timeout=2.0)
+                        if isinstance(msg, bytes):
+                            continue  # 跳过二进制消息
+                        data = json.loads(msg)
+                        self._handle_ws_message(data)
                     except asyncio.TimeoutError:
                         continue
-                    except websockets.ConnectionClosed:
-                        break
+                    except json.JSONDecodeError:
+                        continue
+                    except Exception as e:
+                        log(f"WebSocket消息错误: {e}")
         except Exception as e:
             log(f"WebSocket连接失败: {e}")
+            log("将使用基础轮询模式")
     
-    async def _handle_ws_message(self, data: Dict):
+    def _handle_ws_message(self, data: Dict):
+        """处理WebSocket消息"""
         msg_type = data.get('type')
         msg_data = data.get('data', {})
         
         if msg_type == 'progress':
             value = msg_data.get('value', 0)
             max_value = msg_data.get('max', 100)
-            node = msg_data.get('node', '')
             if self._current_task:
-                progress_pct = int(value / max_value * 100) if max_value > 0 else 0
+                pct = int(value / max_value * 100) if max_value > 0 else 0
+                log(f"[ComfyUI] Progress: {value}/{max_value} ({pct}%)")
                 self.task_progress.emit(
                     self._current_task.task_id, value, max_value,
-                    f"节点 {node}: {progress_pct}%"
+                    f"进度: {value}/{max_value} ({pct}%)"
                 )
         elif msg_type == 'executing':
             node = msg_data.get('node')
-            if node and self._current_task:
-                self.status_changed.emit(f"正在执行节点: {node}")
+            if node:
+                log(f"[ComfyUI] 执行节点: {node}")
+                self.status_changed.emit(f"执行节点: {node}")
+        elif msg_type == 'executed':
+            log(f"[ComfyUI] 节点执行完成")
     
     def run(self):
         self._cancelled = False
