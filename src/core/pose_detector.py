@@ -27,9 +27,6 @@ def get_default_rtm_models():
     
     # 检查模型文件是否存在
     if det_model_path.exists() and pose_model_path.exists():
-        print(f"[INFO] 找到本地 RTMPose 模型:")
-        print(f"  检测模型: {det_model_path}")
-        print(f"  姿态模型: {pose_model_path}")
         return str(det_model_path), str(pose_model_path)
     else:
         print(f"[WARNING] 本地模型目录不存在或模型文件缺失: {models_dir}")

@@ -115,7 +115,7 @@ class FrameExtractor:
                         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                         
                         frame_data = FrameData(
-                            index=frame_number,  # 使用实际视频帧号，而不是时间戳索引
+                            index=idx,  # 使用提取顺序索引，而非视频帧号
                             timestamp=timestamp,
                             image=frame_rgb
                         )
@@ -145,7 +145,7 @@ class FrameExtractor:
                         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                         
                         frame_data = FrameData(
-                            index=current_frame,  # 使用实际视频帧号，而不是时间戳索引
+                            index=idx,  # 使用提取顺序索引，而非视频帧号
                             timestamp=timestamp,
                             image=frame_rgb
                         )

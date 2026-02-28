@@ -753,6 +753,14 @@ class FramePreview(QWidget):
         self._update_selection_info()
         self.selection_changed.emit(self.get_selected_indices())
     
+    def select_indices(self, indices: List[int]):
+        """选中指定索引的帧"""
+        indices_set = set(indices)
+        for thumb in self._thumbnails:
+            thumb.set_selected(thumb.frame_index in indices_set)
+        self._update_selection_info()
+        self.selection_changed.emit(self.get_selected_indices())
+    
     def get_selected_indices(self) -> List[int]:
         """获取选中的帧索引"""
         return [thumb.frame_index for thumb in self._thumbnails if thumb._is_selected]

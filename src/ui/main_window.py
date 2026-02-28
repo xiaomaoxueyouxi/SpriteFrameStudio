@@ -2835,47 +2835,118 @@ class MainWindow(QMainWindow):
     
     def _show_similar_frames_result(self, similar_frames):
         """显示相似帧结果"""
-        from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit, QPushButton, QScrollArea
+        from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
+                                       QPushButton, QScrollArea, QWidget, QFrame)
         from PySide6.QtCore import Qt
         
         dialog = QDialog(self)
         dialog.setWindowTitle("最相似帧分析结果")
-        dialog.resize(500, 400)
+        dialog.resize(550, 450)
         
         layout = QVBoxLayout(dialog)
         
-        # 结果文本
-        result_text = "最相似帧分析结果\n\n"
-        result_text += f"共分析 {len(similar_frames)} 帧\n\n"
-        result_text += "按相似度从高到低排序:\n\n"
-        
-        for i, item in enumerate(similar_frames, 1):
-            frame_idx = item["frame_index"]
-            similar_idx = item["similar_frame_index"]
-            similarity = item["similarity"] * 100
-            result_text += f"{i}. 帧 {frame_idx} 的最相似帧是 帧 {similar_idx} (相似度: {similarity:.2f}%)\n"
-        
-        # 文本编辑框
-        text_edit = QTextEdit()
-        text_edit.setPlainText(result_text)
-        text_edit.setReadOnly(True)
+        # 标题和统计信息
+        header_label = QLabel(f"共分析 {len(similar_frames)} 帧，按相似度从高到低排序")
+        header_label.setStyleSheet("font-weight: bold; padding: 5px; color: white;")
+        layout.addWidget(header_label)
         
         # 滚动区域
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setWidget(text_edit)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        
+        # 列表容器
+        list_widget = QWidget()
+        list_layout = QVBoxLayout(list_widget)
+        list_layout.setSpacing(5)
+        list_layout.setContentsMargins(5, 5, 5, 5)
+        
+        # 创建每一行
+        for i, item in enumerate(similar_frames, 1):
+            frame_idx = item["frame_index"]
+            similar_idx = item["similar_frame_index"]
+            similarity = item["similarity"] * 100
+            
+            # 行容器
+            row_frame = QFrame()
+            row_frame.setFrameShape(QFrame.StyledPanel)
+            row_frame.setStyleSheet("""
+                QFrame {
+                    background-color: #f5f5f5;
+                    border: 1px solid #ddd;
+                    border-radius: 4px;
+                    padding: 5px;
+                }
+                QFrame:hover {
+                    background-color: #e8e8e8;
+                }
+            """)
+            row_layout = QHBoxLayout(row_frame)
+            row_layout.setContentsMargins(10, 5, 10, 5)
+            
+            # 序号
+            num_label = QLabel(f"{i}.")
+            num_label.setFixedWidth(30)
+            num_label.setStyleSheet("font-weight: bold; color: #666;")
+            row_layout.addWidget(num_label)
+            
+            # 帧信息
+            info_label = QLabel(f"帧 {frame_idx} 的最相似帧是 帧 {similar_idx}")
+            info_label.setStyleSheet("font-size: 13px; color: #333;")
+            row_layout.addWidget(info_label, 1)
+            
+            # 相似度
+            similarity_label = QLabel(f"{similarity:.2f}%")
+            similarity_label.setFixedWidth(70)
+            similarity_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            similarity_label.setStyleSheet("color: #2196F3; font-weight: bold;")
+            row_layout.addWidget(similarity_label)
+            
+            # 使用按钮
+            use_btn = QPushButton("使用")
+            use_btn.setFixedWidth(60)
+            use_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #4CAF50;
+                    color: white;
+                    border: none;
+                    border-radius: 3px;
+                    padding: 5px 10px;
+                }
+                QPushButton:hover {
+                    background-color: #45a049;
+                }
+                QPushButton:pressed {
+                    background-color: #3d8b40;
+                }
+            """)
+            
+            # 点击使用按钮时选中帧（不选最后一帧）
+            def make_use_callback(fidx, sidx):
+                def callback():
+                    # 选中从 frame_idx 到 similar_idx-1 的帧（不包含最后一帧）
+                    start = min(fidx, sidx)
+                    end = max(fidx, sidx)
+                    # 不选最后一帧
+                    indices_to_select = list(range(start, end))
+                    if indices_to_select:
+                        self.frame_preview.select_indices(indices_to_select)
+                        self.status_label.setText(f"已选中帧 {start} - {end-1}，共 {len(indices_to_select)} 帧")
+                    dialog.accept()
+                return callback
+            
+            use_btn.clicked.connect(make_use_callback(frame_idx, similar_idx))
+            row_layout.addWidget(use_btn)
+            
+            list_layout.addWidget(row_frame)
+        
+        list_layout.addStretch()
+        scroll_area.setWidget(list_widget)
         layout.addWidget(scroll_area, 1)
         
-        # 按钮布局
+        # 底部按钮布局
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
-        
-        # 复制按钮
-        copy_btn = QPushButton("复制结果")
-        def copy_result():
-            dialog.clipboard().setText(result_text)
-        copy_btn.clicked.connect(copy_result)
-        btn_layout.addWidget(copy_btn)
         
         # 关闭按钮
         close_btn = QPushButton("关闭")
@@ -2930,11 +3001,32 @@ class MainWindow(QMainWindow):
             self._frame_manager.clear()
             self.frame_preview.clear()
             
-            # 切换到准备视频页面
-            self.page_stack.setCurrentIndex(1)
-            self.tab_buttons[1].setChecked(True)
+            # 切换到帧处理Tab，然后切换到准备视频页面
+            self.top_tab_widget.setCurrentIndex(0)
+            self.page_stack.setCurrentIndex(0)
+            self.tab_buttons[0].setChecked(True)
             
             self.statusBar().showMessage(f"已加载生成的视频: {filename}")
+    
+    def switch_to_prepare_video_tab(self):
+        """切换到准备视频Tab (索引0)"""
+        self.page_stack.setCurrentIndex(0)
+        if self.tab_buttons and len(self.tab_buttons) > 0:
+            # 取消其他按钮选中
+            for btn in self.tab_buttons:
+                btn.setChecked(False)
+            # 选中第一个按钮
+            self.tab_buttons[0].setChecked(True)
+    
+    def switch_to_animation_preview_tab(self):
+        """切换到动画预览Tab (索引2)"""
+        self.page_stack.setCurrentIndex(2)
+        if self.tab_buttons and len(self.tab_buttons) > 2:
+            # 取消其他按钮选中
+            for btn in self.tab_buttons:
+                btn.setChecked(False)
+            # 选中第三个按钮
+            self.tab_buttons[2].setChecked(True)
     
     def closeEvent(self, event):
         """关闭事件"""
