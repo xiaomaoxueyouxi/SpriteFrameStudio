@@ -364,6 +364,9 @@ class MagicWandEditor(QDialog):
         self._contiguous = True
         self._anti_alias = True
         
+        self._eraser_size = 10
+        self._is_erasing = False
+        
         self._fill_color = (255, 255, 255, 255)
         self._result_saved = False
         
@@ -448,6 +451,11 @@ class MagicWandEditor(QDialog):
         self._magic_wand_btn.setChecked(True)
         self._magic_wand_btn.setToolTip("魔棒选区工具")
         layout.addWidget(self._magic_wand_btn)
+        
+        self._eraser_btn = QPushButton("🧹 橡皮擦")
+        self._eraser_btn.setCheckable(True)
+        self._eraser_btn.setToolTip("橡皮擦工具 - 擦除像素")
+        layout.addWidget(self._eraser_btn)
         
         self._move_btn = QPushButton("✋ 移动")
         self._move_btn.setCheckable(True)
@@ -574,6 +582,29 @@ class MagicWandEditor(QDialog):
         
         layout.addWidget(params_group)
         
+        # 橡皮擦参数
+        eraser_group = QGroupBox("橡皮擦参数")
+        eraser_layout = QVBoxLayout(eraser_group)
+        
+        eraser_label = QLabel("橡皮大小:")
+        eraser_layout.addWidget(eraser_label)
+        
+        eraser_row = QHBoxLayout()
+        self._eraser_slider = QSlider(Qt.Horizontal)
+        self._eraser_slider.setRange(1, 50)
+        self._eraser_slider.setValue(self._eraser_size)
+        eraser_row.addWidget(self._eraser_slider)
+        
+        self._eraser_spin = QSpinBox()
+        self._eraser_spin.setRange(1, 50)
+        self._eraser_spin.setValue(self._eraser_size)
+        self._eraser_spin.setFixedWidth(60)
+        self._eraser_spin.setSuffix("px")
+        eraser_row.addWidget(self._eraser_spin)
+        eraser_layout.addLayout(eraser_row)
+        
+        layout.addWidget(eraser_group)
+        
         edit_group = QGroupBox("编辑操作")
         edit_layout = QVBoxLayout(edit_group)
         
@@ -699,6 +730,7 @@ class MagicWandEditor(QDialog):
         self._redo_btn.clicked.connect(self._redo)
         
         self._magic_wand_btn.clicked.connect(lambda: self._set_tool("magic_wand"))
+        self._eraser_btn.clicked.connect(lambda: self._set_tool("eraser"))
         self._move_btn.clicked.connect(lambda: self._set_tool("move"))
         
         self._zoom_in_btn.clicked.connect(self._zoom_in)
@@ -711,6 +743,9 @@ class MagicWandEditor(QDialog):
         self._tolerance_spin.valueChanged.connect(self._on_tolerance_spin_changed)
         self._contiguous_check.stateChanged.connect(self._on_contiguous_changed)
         self._anti_alias_check.stateChanged.connect(self._on_anti_alias_changed)
+        
+        self._eraser_slider.valueChanged.connect(self._on_eraser_size_changed)
+        self._eraser_spin.valueChanged.connect(self._on_eraser_spin_changed)
         
         self._delete_btn.clicked.connect(self._delete_selection)
         self._fill_btn.clicked.connect(self._fill_selection)
@@ -729,6 +764,8 @@ class MagicWandEditor(QDialog):
         
         self._canvas.mousePressEvent = self._on_canvas_mouse_press
         self._canvas.mouseMoveEvent = self._on_canvas_mouse_move
+        self._canvas.mouseReleaseEvent = self._on_canvas_mouse_release
+        self._canvas.wheelEvent = self._on_canvas_wheel
         
         self._canvas.image_changed.connect(self._update_info)
         self._canvas.selection_changed.connect(self._update_selection_info)
@@ -737,12 +774,73 @@ class MagicWandEditor(QDialog):
         self._tool_mode = tool
         
         self._magic_wand_btn.setChecked(tool == "magic_wand")
+        self._eraser_btn.setChecked(tool == "eraser")
         self._move_btn.setChecked(tool == "move")
         
         if tool == "magic_wand":
             self._canvas.setCursor(QCursor(Qt.CrossCursor))
+        elif tool == "eraser":
+            self._canvas.setCursor(self._create_eraser_cursor())
         else:
             self._canvas.setCursor(QCursor(Qt.OpenHandCursor))
+    
+    def _create_eraser_cursor(self) -> QCursor:
+        """创建像素方格橡皮擦光标，大小随缩放变化"""
+        size = self._eraser_size
+        zoom = getattr(self._canvas, '_zoom', 1.0)
+        # 光标大小精确等于擦除区域大小
+        actual_size = int(size * zoom)
+        # 光标显示大小（最小8像素以便看清，但热点位置基于实际大小）
+        display_size = max(8, actual_size)
+        
+        pixmap = QPixmap(display_size, display_size)
+        pixmap.fill(Qt.transparent)
+        
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        
+        # 绘制实际擦除区域（居中显示）
+        offset = (display_size - actual_size) // 2
+        if actual_size > 0:
+            cell_size = max(1, actual_size // 4) if actual_size >= 4 else 1
+            for i in range(0, actual_size, cell_size):
+                for j in range(0, actual_size, cell_size):
+                    if (i // cell_size + j // cell_size) % 2 == 0:
+                        painter.fillRect(offset + i, offset + j, cell_size, cell_size, QColor(200, 200, 200))
+                    else:
+                        painter.fillRect(offset + i, offset + j, cell_size, cell_size, QColor(100, 100, 100))
+            # 绘制实际擦除区域边框
+            painter.setPen(QPen(QColor(255, 0, 0), 1))
+            painter.drawRect(offset, offset, actual_size - 1, actual_size - 1)
+        else:
+            # 太小时绘制十字
+            painter.setPen(QPen(QColor(255, 0, 0), 1))
+            center = display_size // 2
+            painter.drawLine(center - 3, center, center + 3, center)
+            painter.drawLine(center, center - 3, center, center + 3)
+        
+        painter.end()
+        
+        return QCursor(pixmap, display_size // 2, display_size // 2)
+    
+    def _update_eraser_cursor(self):
+        """更新橡皮擦光标"""
+        if self._tool_mode == "eraser":
+            self._canvas.setCursor(self._create_eraser_cursor())
+    
+    def _on_eraser_size_changed(self, value: int):
+        self._eraser_size = value
+        self._eraser_spin.blockSignals(True)
+        self._eraser_spin.setValue(value)
+        self._eraser_spin.blockSignals(False)
+        self._update_eraser_cursor()
+    
+    def _on_eraser_spin_changed(self, value: int):
+        self._eraser_size = value
+        self._eraser_slider.blockSignals(True)
+        self._eraser_slider.setValue(value)
+        self._eraser_slider.blockSignals(False)
+        self._update_eraser_cursor()
     
     def _set_background(self, mode: str):
         self._canvas.set_background_mode(mode)
@@ -761,6 +859,10 @@ class MagicWandEditor(QDialog):
                 if 0 <= img_x < w and 0 <= img_y < h:
                     self._create_selection(img_x, img_y)
         
+        elif event.button() == Qt.LeftButton and self._tool_mode == "eraser":
+            self._is_erasing = True
+            self._erase_at_position(event.pos())
+        
         ImageCanvas.mousePressEvent(self._canvas, event)
     
     def _on_canvas_mouse_move(self, event):
@@ -778,7 +880,69 @@ class MagicWandEditor(QDialog):
             else:
                 self._color_info.setText("超出范围")
         
+        # 橡皮擦拖动绘制
+        if self._is_erasing and self._tool_mode == "eraser":
+            self._erase_at_position(event.pos())
+        
         ImageCanvas.mouseMoveEvent(self._canvas, event)
+    
+    def _on_canvas_mouse_release(self, event):
+        if event.button() == Qt.LeftButton and self._is_erasing:
+            self._is_erasing = False
+            self._save_state()
+            self._status_label.setText("擦除完成")
+        ImageCanvas.mouseReleaseEvent(self._canvas, event)
+    
+    def _on_canvas_wheel(self, event):
+        """处理缩放事件，更新橡皮擦光标"""
+        ImageCanvas.wheelEvent(self._canvas, event)
+        # 缩放后更新橡皮擦光标
+        if self._tool_mode == "eraser":
+            self._canvas.setCursor(self._create_eraser_cursor())
+    
+    def _erase_at_position(self, pos):
+        """在指定位置擦除像素"""
+        if self._current_image is None:
+            return
+        
+        sx, sy = pos.x(), pos.y()
+        # 使用四舍五入获取更准确的图像坐标
+        zoom = getattr(self._canvas, '_zoom', 1.0)
+        offset_x = getattr(self._canvas, '_offset_x', 0)
+        offset_y = getattr(self._canvas, '_offset_y', 0)
+        if zoom == 0:
+            return
+        img_x = round((sx - offset_x) / zoom)
+        img_y = round((sy - offset_y) / zoom)
+        
+        h, w = self._current_image.shape[:2]
+        
+        # 确保图像有alpha通道
+        if len(self._current_image.shape) == 3 and self._current_image.shape[2] == 3:
+            # 转换为RGBA
+            self._current_image = np.concatenate([
+                self._current_image,
+                np.full((h, w, 1), 255, dtype=np.uint8)
+            ], axis=2)
+        
+        # 擦除区域（允许鼠标中心在图像外，只要有交集就擦除）
+        half_size = self._eraser_size // 2
+        x1 = img_x - half_size
+        y1 = img_y - half_size
+        x2 = x1 + self._eraser_size
+        y2 = y1 + self._eraser_size
+        
+        # 裁剪到图像范围
+        x1_clip = max(0, x1)
+        y1_clip = max(0, y1)
+        x2_clip = min(w, x2)
+        y2_clip = min(h, y2)
+        
+        if x1_clip < x2_clip and y1_clip < y2_clip:
+            # 设置alpha为0（透明）
+            self._current_image[y1_clip:y2_clip, x1_clip:x2_clip, 3] = 0
+            self._canvas.set_image(self._current_image, reset_view=False)
+            self._canvas.update()
     
     def _create_selection(self, x: int, y: int):
         try:
