@@ -3,6 +3,7 @@ import time
 import random
 import json
 import shutil
+import gc
 from datetime import datetime
 from typing import Optional, Dict, List
 from pathlib import Path
@@ -22,7 +23,7 @@ class SmoothMixTask:
     def __init__(self, task_id: int, start_image: str, end_image: str = "", 
                  prompt: str = "", negative_prompt: str = "", width: int = 368, height: int = 704,
                  frames: int = 33, fps: int = 16, steps: int = 4, seed: int = -1,
-                 sage_attention: bool = False, enable_upscale: bool = False):
+                 sage_attention: bool = False):
         self.task_id = task_id
         self.start_image = start_image
         self.end_image = end_image or start_image
@@ -35,7 +36,6 @@ class SmoothMixTask:
         self.steps = steps
         self.seed = seed if seed > 0 else random.randint(0, 2**31 - 1)
         self.sage_attention = sage_attention
-        self.enable_upscale = enable_upscale
         self.status = "pending"
         self.prompt_id: Optional[str] = None
         self.output_path: Optional[str] = None
@@ -78,7 +78,6 @@ class SmoothMixTask:
             "steps": self.steps,
             "seed": self.seed,
             "sage_attention": self.sage_attention,
-            "enable_upscale": self.enable_upscale,
             "status": self.status,
             "output_path": self.output_path,
             "error_msg": self.error_msg,
@@ -102,8 +101,7 @@ class SmoothMixTask:
             fps=data.get("fps", 16),
             steps=data.get("steps", 4),
             seed=data.get("seed", -1),
-            sage_attention=data.get("sage_attention", False),
-            enable_upscale=data.get("enable_upscale", False)
+            sage_attention=data.get("sage_attention", False)
         )
         task.status = data.get("status", "pending")
         task.output_path = data.get("output_path")
@@ -158,8 +156,7 @@ class SmoothMixWorker(QThread):
         
     def add_task(self, start_image: str, end_image: str = "", prompt: str = "",
                  negative_prompt: str = "", width: int = 368, height: int = 704, frames: int = 33,
-                 fps: int = 16, steps: int = 4, seed: int = -1, sage_attention: bool = False,
-                 enable_upscale: bool = False) -> int:
+                 fps: int = 16, steps: int = 4, seed: int = -1, sage_attention: bool = False) -> int:
         self._task_counter += 1
         task = SmoothMixTask(
             task_id=self._task_counter,
@@ -173,8 +170,7 @@ class SmoothMixWorker(QThread):
             fps=fps,
             steps=steps,
             seed=seed,
-            sage_attention=sage_attention,
-            enable_upscale=enable_upscale
+            sage_attention=sage_attention
         )
         self._tasks.append(task)
         self._save_tasks()  # 保存任务队列
@@ -193,6 +189,7 @@ class SmoothMixWorker(QThread):
     
     def clear_queue(self):
         self._tasks = [t for t in self._tasks if t.status in ("running", "completed", "failed")]
+        self._save_tasks()
         self.queue_changed.emit(len([t for t in self._tasks if t.status == "pending"]))
     
     def get_queue_length(self) -> int:
@@ -543,6 +540,15 @@ class SmoothMixWorker(QThread):
             self._save_tasks()  # 保存任务队列
             self.queue_changed.emit(self.get_queue_length())
     
+    def cleanup_memory(self):
+        """清理ComfyUI内存（公开方法）"""
+        try:
+            requests.post(f"{self.base_url}/free", json={"unload_models": True, "free_memory": True}, timeout=10)
+            self._log("已释放ComfyUI内存")
+            return True
+        except:
+            return False
+    
     def _wait_for_completion(self, task: SmoothMixTask, timeout: int = 1800) -> Optional[str]:
         """等待任务完成，使用WebSocket事件通知而非轮询"""
         start_time = time.time()
@@ -604,66 +610,9 @@ class SmoothMixWorker(QThread):
             save_path = self.output_dir / f"task_{task.task_id}_{latest.name}"
             shutil.copy2(latest, save_path)
             
-            # 高清修复
-            if task.enable_upscale:
-                upscaled_path = self._upscale_video(str(save_path), task.task_id)
-                if upscaled_path:
-                    return upscaled_path
-            
             return str(save_path)
         
         self._log("未找到mp4文件")
-        return None
-    
-    def _upscale_video(self, video_path: str, task_id: int) -> Optional[str]:
-        """使用RealESRGAN进行高清修复"""
-        try:
-            self._log(f"任务 {task_id}: 开始高清修复...")
-            self.status_changed.emit("正在进行高清修复...")
-            
-            import subprocess
-            base_path = SMOOTHMIX_DIR
-            realesrgan_script = base_path / "res" / "inference_realesrgan_video.py"
-            model_path = base_path / "res" / "RealESRGAN_x4plus.pth"
-            python_exe = base_path / "py312" / "python.exe"
-            
-            if not realesrgan_script.exists():
-                self._log(f"RealESRGAN脚本不存在: {realesrgan_script}")
-                return None
-            
-            output_path = str(Path(video_path).with_stem(f"{Path(video_path).stem}_hd"))
-            
-            cmd = [
-                str(python_exe),
-                str(realesrgan_script),
-                "-i", video_path,
-                "-o", str(Path(video_path).parent),
-                "-n", "RealESRGAN_x4plus",
-                "-s", "4"
-            ]
-            
-            env = {
-                "PYTHONPATH": str(base_path / "res"),
-                "TORCH_HOME": str(base_path / "cache")
-            }
-            
-            import os
-            env.update(os.environ)
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=600)
-            
-            if result.returncode == 0:
-                self._log(f"任务 {task_id}: 高清修复完成")
-                # 找到修复后的视频
-                hd_files = list(Path(video_path).parent.glob(f"*_out.mp4"))
-                if hd_files:
-                    return str(hd_files[-1])
-            else:
-                self._log(f"高清修复失败: {result.stderr}")
-            
-        except Exception as e:
-            self._log(f"高清修复出错: {e}")
-        
         return None
     
     def cancel(self):
@@ -675,4 +624,9 @@ class SmoothMixWorker(QThread):
         if self._current_task:
             self._current_task.status = "failed"
             self._current_task.error_msg = "用户取消"
+            self._current_task.end_time = time.time()
+            self._save_tasks()
+            self._log(f"任务 {self._current_task.task_id} 已取消")
+            self.task_failed.emit(self._current_task.task_id, "用户取消")
         self.interrupt()
+        self._execution_complete.set()  # 解除等待阻塞

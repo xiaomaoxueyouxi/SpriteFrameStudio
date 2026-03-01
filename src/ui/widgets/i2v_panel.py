@@ -203,6 +203,7 @@ class I2VPanel(QWidget):
         # 提示词
         prompt_layout.addWidget(QLabel("提示词:"))
         self.positive_prompt_edit = QTextEdit()
+        self.positive_prompt_edit.setAcceptRichText(False)  # 只接受纯文本
         self.positive_prompt_edit.setPlaceholderText("描述你想要生成的视频内容...")
         self.positive_prompt_edit.setText(DEFAULT_POSITIVE_PROMPT)
         self.positive_prompt_edit.setMaximumHeight(60)

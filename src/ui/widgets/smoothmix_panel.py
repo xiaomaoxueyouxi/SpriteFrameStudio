@@ -175,6 +175,11 @@ class SmoothMixPanel(QWidget):
         self.start_btn.clicked.connect(self._start_comfyui)
         status_layout.addWidget(self.start_btn)
         
+        self.free_mem_btn = QPushButton("释放显存")
+        self.free_mem_btn.setMinimumWidth(80)
+        self.free_mem_btn.clicked.connect(self._free_memory)
+        status_layout.addWidget(self.free_mem_btn)
+        
         layout.addWidget(status_frame)
         
         # 主内容区：上下分栏
@@ -204,6 +209,7 @@ class SmoothMixPanel(QWidget):
         # 正向提示词
         prompt_layout.addWidget(QLabel("正向提示词:"))
         self.prompt_edit = QTextEdit()
+        self.prompt_edit.setAcceptRichText(False)  # 只接受纯文本
         self.prompt_edit.setPlaceholderText("描述视频内容...")
         self.prompt_edit.setText("镜头跟随，缓慢走路")
         self.prompt_edit.setMaximumHeight(50)
@@ -212,6 +218,7 @@ class SmoothMixPanel(QWidget):
         # 负向提示词
         prompt_layout.addWidget(QLabel("负向提示词 (可选):"))
         self.negative_prompt_edit = QTextEdit()
+        self.negative_prompt_edit.setAcceptRichText(False)  # 只接受纯文本
         self.negative_prompt_edit.setPlaceholderText("留空使用默认负向提示词...")
         self.negative_prompt_edit.setMaximumHeight(40)
         prompt_layout.addWidget(self.negative_prompt_edit)
@@ -239,7 +246,7 @@ class SmoothMixPanel(QWidget):
         frames_row.addWidget(QLabel("帧数:"))
         self.frames_spin = QSpinBox()
         self.frames_spin.setRange(9, 121)
-        self.frames_spin.setValue(33)
+        self.frames_spin.setValue(80)
         self.frames_spin.setMinimumWidth(70)
         self.frames_spin.valueChanged.connect(self._update_duration)
         frames_row.addWidget(self.frames_spin)
@@ -252,7 +259,7 @@ class SmoothMixPanel(QWidget):
         self.fps_spin.valueChanged.connect(self._update_duration)
         frames_row.addWidget(self.fps_spin)
         frames_row.addSpacing(10)
-        self.duration_label = QLabel("2.1秒")
+        self.duration_label = QLabel("5.0秒")
         self.duration_label.setStyleSheet("color: #0078d4; font-weight: bold;")
         frames_row.addWidget(self.duration_label)
         frames_row.addStretch()
@@ -268,28 +275,33 @@ class SmoothMixPanel(QWidget):
         steps_seed_row.addSpacing(10)
         steps_seed_row.addWidget(QLabel("种子:"))
         self.seed_spin = QSpinBox()
-        self.seed_spin.setRange(-1, 2**31 - 1)
-        self.seed_spin.setValue(-1)
-        self.seed_spin.setSpecialValueText("随机")
-        self.seed_spin.setMinimumWidth(80)
+        self.seed_spin.setRange(0, 2**31 - 1)
+        self.seed_spin.setValue(0)
+        self.seed_spin.setMinimumWidth(100)
         steps_seed_row.addWidget(self.seed_spin)
-        self.random_btn = QPushButton("随机")
-        self.random_btn.setFixedSize(28, 28)
-        self.random_btn.clicked.connect(self._random_seed)
-        steps_seed_row.addWidget(self.random_btn)
+        self.random_seed_btn = QPushButton("生成")
+        self.random_seed_btn.setFixedWidth(40)
+        self.random_seed_btn.clicked.connect(self._generate_random_seed)
+        steps_seed_row.addWidget(self.random_seed_btn)
+        self.random_seed_check = QCheckBox("随机")
+        self.random_seed_check.setChecked(True)
+        self.random_seed_check.setToolTip("勾选后每次生成使用新的随机种子")
+        self.random_seed_check.setStyleSheet("QCheckBox { color: white; }")
+        steps_seed_row.addWidget(self.random_seed_check)
         steps_seed_row.addStretch()
         params_layout.addLayout(steps_seed_row)
         
-        # 加速和高清选项
+        # 加速选项
         options_row = QHBoxLayout()
         self.sage_attn_check = QCheckBox("Sage-Attention")
         self.sage_attn_check.setToolTip("启用Sage-Attention可加速生成")
         self.sage_attn_check.setStyleSheet("QCheckBox { color: white; }")
         options_row.addWidget(self.sage_attn_check)
-        self.upscale_check = QCheckBox("高清修复(4x)")
-        self.upscale_check.setToolTip("使用RealESRGAN进行4倍高清放大")
-        self.upscale_check.setStyleSheet("QCheckBox { color: white; }")
-        options_row.addWidget(self.upscale_check)
+        self.auto_free_check = QCheckBox("自动释放显存")
+        self.auto_free_check.setToolTip("队列完成后自动释放ComfyUI显存")
+        self.auto_free_check.setStyleSheet("QCheckBox { color: white; }")
+        self.auto_free_check.setChecked(True)
+        options_row.addWidget(self.auto_free_check)
         options_row.addStretch()
         params_layout.addLayout(options_row)
         
@@ -302,10 +314,6 @@ class SmoothMixPanel(QWidget):
         self.add_btn.clicked.connect(self._add_to_queue)
         add_row.addWidget(self.add_btn)
         
-        self.clear_btn = QPushButton("清空队列")
-        self.clear_btn.setMinimumHeight(35)
-        self.clear_btn.clicked.connect(self._clear_queue)
-        add_row.addWidget(self.clear_btn)
         params_main_layout.addLayout(add_row)
         
         top_layout.addWidget(params_widget, 1)
@@ -355,7 +363,7 @@ class SmoothMixPanel(QWidget):
         
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(120)
+        self.log_text.setMinimumHeight(80)
         self.log_text.setStyleSheet("QTextEdit { background-color: #1e1e1e; color: #cccccc; font-family: Consolas; font-size: 12px; }")
         log_layout.addWidget(self.log_text)
         
@@ -452,7 +460,7 @@ class SmoothMixPanel(QWidget):
             self._log(f"启动失败: {e}")
             QMessageBox.warning(self, "启动失败", str(e))
     
-    def _random_seed(self):
+    def _generate_random_seed(self):
         import random
         self.seed_spin.setValue(random.randint(0, 2**31 - 1))
     
@@ -477,9 +485,13 @@ class SmoothMixPanel(QWidget):
         frames = self.frames_spin.value()
         fps = self.fps_spin.value()
         steps = self.steps_spin.value()
-        seed = self.seed_spin.value()
+        # 种子：勾选随机则生成新种子，否则用输入框的值
+        if self.random_seed_check.isChecked():
+            import random
+            seed = random.randint(0, 2**31 - 1)
+        else:
+            seed = self.seed_spin.value()
         sage_attention = self.sage_attn_check.isChecked()
-        enable_upscale = self.upscale_check.isChecked()
         
         # 确保worker对象存在
         self._ensure_worker_exists()
@@ -496,8 +508,7 @@ class SmoothMixPanel(QWidget):
             fps=fps,
             steps=steps,
             seed=seed,
-            sage_attention=sage_attention,
-            enable_upscale=enable_upscale
+            sage_attention=sage_attention
         )
         
         # 添加任务后再启动worker
@@ -505,6 +516,7 @@ class SmoothMixPanel(QWidget):
         
         self._update_queue_list()
         self._log(f"任务 {task_id} 已添加到队列")
+        QMessageBox.information(self, "提示", f"任务 {task_id} 已添加到队列")
     
     def _ensure_worker_exists(self):
         """确保worker对象存在且可用"""
@@ -569,36 +581,29 @@ class SmoothMixPanel(QWidget):
             return
         
         tasks = self._worker.get_all_tasks()
+        # 按创建时间倒序排列，最新的在前面
+        tasks = sorted(tasks, key=lambda t: t.create_time, reverse=True)
         running_count = 0
         pending_count = 0
         
-        # 清理已不存在的任务Widget
-        existing_ids = {t.task_id for t in tasks}
+        # 清理所有现有Widget，重新按序添加
         for task_id in list(self._task_widgets.keys()):
-            if task_id not in existing_ids:
-                widget = self._task_widgets.pop(task_id)
-                self.queue_container_layout.removeWidget(widget)
-                widget.deleteLater()
+            widget = self._task_widgets.pop(task_id)
+            self.queue_container_layout.removeWidget(widget)
+            widget.deleteLater()
         
-        # 更新或创建任务Widget
+        # 重新创建任务Widget
         for task in tasks:
-            # 移除状态过滤，显示所有任务
             if task.status == "running":
                 running_count += 1
             elif task.status == "pending":
                 pending_count += 1
             
-            if task.task_id not in self._task_widgets:
-                # 创建新的任务Widget
-                widget = self._create_task_widget(task)
-                self._task_widgets[task.task_id] = widget
-                # 插入到stretch之前
-                self.queue_container_layout.insertWidget(
-                    self.queue_container_layout.count() - 1, widget
-                )
-            else:
-                # 更新现有Widget（状态变化时更新按钮可见性）
-                self._update_task_widget(task)
+            widget = self._create_task_widget(task)
+            self._task_widgets[task.task_id] = widget
+            self.queue_container_layout.insertWidget(
+                self.queue_container_layout.count() - 1, widget
+            )
         
         # 更新标签
         total = running_count + pending_count + len([t for t in tasks if t.status in ("completed", "failed")])
@@ -617,8 +622,16 @@ class SmoothMixPanel(QWidget):
     
     def _create_task_widget(self, task) -> QFrame:
         """创建任务卡片Widget"""
+        # 外层容器
+        container = QWidget()
+        container.setProperty("task_id", task.task_id)
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
+        
+        # 任务内容行
         frame = QWidget()
-        frame.setProperty("task_id", task.task_id)
+        frame.mouseDoubleClickEvent = lambda e, t=task: self._show_task_detail(t)
         
         layout = QHBoxLayout(frame)
         layout.setContentsMargins(8, 6, 8, 6)
@@ -639,24 +652,30 @@ class SmoothMixPanel(QWidget):
         # 查看按钮
         view_btn = QPushButton("查看")
         view_btn.setFixedWidth(40)
-        layout.addWidget(view_btn)  # 先添加
+        layout.addWidget(view_btn)
         if not (task.status == "completed" and task.output_path):
-            view_btn.hide()  # 后隐藏
-        # 使用闭包捕获task_id，避免信号参数问题
+            view_btn.hide()
         task_id_for_view = task.task_id
         view_btn.clicked.connect(lambda _=None, tid=task_id_for_view: self._view_video(tid))
         
         # 删除按钮
         delete_btn = QPushButton("删除")
         delete_btn.setFixedWidth(40)
-        layout.addWidget(delete_btn)  # 先添加
+        layout.addWidget(delete_btn)
         if task.status == "running":
-            delete_btn.hide()  # 后隐藏
-        # 使用闭包捕获task_id，避免信号参数问题
+            delete_btn.hide()
         task_id_for_delete = task.task_id
         delete_btn.clicked.connect(lambda _=None, tid=task_id_for_delete: self._delete_task(tid))
         
-        return frame
+        container_layout.addWidget(frame)
+        
+        # 分割线
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setStyleSheet("QFrame { background-color: #333; max-height: 1px; }")
+        container_layout.addWidget(separator)
+        
+        return container
     
     def _update_task_widget(self, task):
         """更新任务卡片 - 重新创建整个widget以更新内容"""
@@ -874,14 +893,11 @@ class SmoothMixPanel(QWidget):
         dialog.accept()
         self.video_generated.emit(video_path)
     
-    def _clear_queue(self):
-        if self._worker:
-            self._worker.clear_queue()
-            self._update_queue_list()
-    
     def _cancel_current(self):
         if self._worker:
+            self._log("正在取消当前任务...")
             self._worker.cancel_current()
+            QTimer.singleShot(500, self._update_queue_list)
     
     def _delete_task(self, task_id: int):
         """删除指定任务"""
@@ -905,6 +921,75 @@ class SmoothMixPanel(QWidget):
                         QMessageBox.warning(self, "无法删除", f"任务状态: {task.status}")
                     return
             QMessageBox.warning(self, "无法删除", f"任务 {task_id} 不存在")
+    
+    def _free_memory(self):
+        """手动释放显存"""
+        if self._worker and self._worker.cleanup_memory():
+            pass  # 日志已在worker中输出
+        else:
+            self._log("释放显存失败，请检查ComfyUI是否运行")
+    
+    def _show_task_detail(self, task):
+        """显示任务详细信息"""
+        from PySide6.QtWidgets import QTextEdit
+        from PySide6.QtGui import QGuiApplication
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"任务 #{task.task_id} 详情")
+        dialog.setMinimumSize(500, 400)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # 详情文本
+        detail_text = f"""任务ID: {task.task_id}
+状态: {self._get_status_text(task)}
+创建时间: {task.get_create_time_str()}
+耗时: {task.get_elapsed_time() or '--'}
+
+=== 图片 ===
+首帧: {task.start_image}
+尾帧: {task.end_image}
+
+=== 提示词 ===
+正向: {task.prompt or '(无)'}
+负向: {task.negative_prompt or '(无)'}
+
+=== 参数 ===
+分辨率: {task.width}x{task.height}
+帧数: {task.frames}
+FPS: {task.fps}
+时长: {task.frames / task.fps:.2f}秒
+步数: {task.steps}
+种子: {task.seed}
+Sage-Attention: {"启用" if task.sage_attention else "禁用"}
+
+=== 输出 ===
+文件: {task.output_path or '(无)'}
+错误: {task.error_msg or '(无)'}"""
+        
+        text_edit = QTextEdit()
+        text_edit.setPlainText(detail_text)
+        text_edit.setReadOnly(True)
+        text_edit.setStyleSheet("QTextEdit { font-family: Consolas; font-size: 12px; }")
+        layout.addWidget(text_edit)
+        
+        # 按钮
+        btn_layout = QHBoxLayout()
+        copy_btn = QPushButton("复制全部")
+        copy_btn.clicked.connect(lambda: QGuiApplication.clipboard().setText(detail_text))
+        btn_layout.addWidget(copy_btn)
+        
+        copy_seed_btn = QPushButton("复制种子")
+        copy_seed_btn.clicked.connect(lambda: QGuiApplication.clipboard().setText(str(task.seed)))
+        btn_layout.addWidget(copy_seed_btn)
+        
+        btn_layout.addStretch()
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(dialog.close)
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+        
+        dialog.exec()
     
     @Slot(str)
     def _on_status_changed(self, status: str):
@@ -942,3 +1027,6 @@ class SmoothMixPanel(QWidget):
     @Slot(int)
     def _on_queue_changed(self, length: int):
         self._update_queue_list()
+        # 如果启用了自动释放且队列已空，则释放显存
+        if length == 0 and self.auto_free_check.isChecked():
+            self._free_memory()
