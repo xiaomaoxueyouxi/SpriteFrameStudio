@@ -523,10 +523,11 @@ class SmoothMixPanel(QWidget):
         frames = self.frames_spin.value()
         fps = self.fps_spin.value()
         steps = self.steps_spin.value()
-        # 种子：勾选随机则生成新种子，否则用输入框的值
+        # 种子：勾选随机则生成新种子并更新输入框，否则用输入框的值
         if self.random_seed_check.isChecked():
             import random
             seed = random.randint(0, 2**31 - 1)
+            self.seed_spin.setValue(seed)  # 更新输入框显示
         else:
             seed = self.seed_spin.value()
         sage_attention = self.sage_attn_check.isChecked()
@@ -553,7 +554,7 @@ class SmoothMixPanel(QWidget):
         self._start_worker_if_needed()
         
         self._update_queue_list()
-        self._log(f"任务 {task_id} 已添加到队列")
+        self._log(f"任务 {task_id} 已添加 (seed={seed})")
     
     def _ensure_worker_exists(self):
         """确保worker对象存在且可用"""
