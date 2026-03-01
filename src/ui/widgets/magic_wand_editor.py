@@ -906,14 +906,14 @@ class MagicWandEditor(QDialog):
             return
         
         sx, sy = pos.x(), pos.y()
-        # 使用四舍五入获取更准确的图像坐标
+        # 使用向下取整：光标中心在像素中心(x+0.5)，int()正好映射到像素x
         zoom = getattr(self._canvas, '_zoom', 1.0)
         offset_x = getattr(self._canvas, '_offset_x', 0)
         offset_y = getattr(self._canvas, '_offset_y', 0)
         if zoom == 0:
             return
-        img_x = round((sx - offset_x) / zoom)
-        img_y = round((sy - offset_y) / zoom)
+        img_x = int((sx - offset_x) / zoom)
+        img_y = int((sy - offset_y) / zoom)
         
         h, w = self._current_image.shape[:2]
         

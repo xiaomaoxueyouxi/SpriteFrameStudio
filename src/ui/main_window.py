@@ -1105,7 +1105,7 @@ class MainWindow(QMainWindow):
         # 刷新历史面板
         self.history_panel.refresh(self._history_manager.get_entries(), self._history_manager.get_memory_usage())
 
-        self.status_label.setText(f"已回退到步骤 #{step_id}")
+        self.status_label.setText(f"已回退到初始状态" if step_id == 0 else f"已回退到步骤 #{step_id}")
     
     @Slot()
     def open_video(self):
@@ -1334,6 +1334,7 @@ class MainWindow(QMainWindow):
         )
         
         # 开始处理
+        self.statusBar().clearMessage()  # 清除状态栏消息，确保status_label可见
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
         self.remove_bg_btn.setEnabled(False)

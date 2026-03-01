@@ -82,28 +82,36 @@ class HistoryManager:
     def revert_to(self, step_id: int, frame_manager: FrameManager) -> List[int]:
         """回退到指定步骤（恢复到该步骤执行后的状态）
         
-        点击"回退到此"意味着保留该步骤及之前的记录，撤销该步骤之后的所有操作。
+        step_id=0 表示回退到初始状态（所有操作之前）
+        其他 step_id 表示保留该步骤及之前的记录，撤销该步骤之后的所有操作。
         
         Args:
-            step_id: 目标步骤编号
+            step_id: 目标步骤编号，0表示初始状态
             frame_manager: 帧管理器
             
         Returns:
             受影响的帧索引列表
         """
-        # 找到目标步骤的索引
-        target_idx = None
-        for i, entry in enumerate(self._entries):
-            if entry.step_id == step_id:
-                target_idx = i
-                break
-        
-        if target_idx is None:
+        if not self._entries:
             return []
         
-        # 如果目标步骤已经是最新的，无需回退
-        if target_idx == len(self._entries) - 1:
-            return []
+        # step_id=0 表示回退到初始状态
+        if step_id == 0:
+            target_idx = -1  # 表示所有条目都要回退
+        else:
+            # 找到目标步骤的索引
+            target_idx = None
+            for i, entry in enumerate(self._entries):
+                if entry.step_id == step_id:
+                    target_idx = i
+                    break
+            
+            if target_idx is None:
+                return []
+            
+            # 如果目标步骤已经是最新的，无需回退
+            if target_idx == len(self._entries) - 1:
+                return []
         
         # 收集受影响的帧索引
         affected_indices = set()

@@ -123,11 +123,25 @@ class HistoryPanel(QWidget):
         self.content_layout.setSpacing(2)  # 减少条目间距
         self.content_layout.setAlignment(Qt.AlignTop)  # 内容顶部对齐
 
-        # 初始状态提示
-        self.initial_state_label = QLabel("  ⚪ 初始状态（帧提取完成）")
+        # 初始状态条目（带回退按钮）
+        self.initial_widget = QWidget()
+        self.initial_widget.setFixedHeight(40)
+        init_layout = QHBoxLayout(self.initial_widget)
+        init_layout.setContentsMargins(10, 5, 10, 5)
+        
+        self.initial_state_label = QLabel("⚪ 初始状态（帧提取完成）")
         self.initial_state_label.setFont(QFont("Arial", 9))
         self.initial_state_label.setStyleSheet("color: #999;")
-        self.content_layout.addWidget(self.initial_state_label)
+        init_layout.addWidget(self.initial_state_label)
+        
+        self.initial_revert_btn = QPushButton("回退到此")
+        self.initial_revert_btn.setFixedSize(80, 22)
+        self.initial_revert_btn.setFont(QFont("Arial", 9))
+        self.initial_revert_btn.clicked.connect(lambda: self.revert_requested.emit(0))
+        self.initial_revert_btn.hide()  # 初始隐藏，有历史时才显示
+        init_layout.addWidget(self.initial_revert_btn, 0, Qt.AlignRight)
+        
+        self.content_layout.addWidget(self.initial_widget)
 
         self.scroll_area.setWidget(self.content_widget)
         layout.addWidget(self.scroll_area)
@@ -139,10 +153,10 @@ class HistoryPanel(QWidget):
             entries: 历史记录列表，最新的在最前面
             memory_usage: 内存使用情况字符串
         """
-        # 清空现有条目
+        # 清空现有条目（保留初始状态控件）
         for i in reversed(range(self.content_layout.count())):
             widget = self.content_layout.itemAt(i).widget()
-            if widget and widget != self.initial_state_label:
+            if widget and widget != self.initial_widget:
                 widget.deleteLater()
 
         # 更新标题
@@ -151,24 +165,26 @@ class HistoryPanel(QWidget):
 
         # 添加历史条目
         if entries:
-            # 隐藏初始状态提示
-            self.initial_state_label.hide()
+            # 有历史时显示初始状态回退按钮
+            self.initial_revert_btn.show()
 
             # 添加历史条目
             for entry in entries:
                 entry_widget = HistoryEntryWidget(entry)
                 entry_widget.revert_clicked.connect(self.revert_requested)
-                self.content_layout.addWidget(entry_widget)
+                self.content_layout.insertWidget(self.content_layout.count() - 1, entry_widget)  # 插到初始状态之前
         else:
-            # 显示初始状态提示
-            self.initial_state_label.show()
+            # 无历史时隐藏初始状态回退按钮
+            self.initial_revert_btn.hide()
 
     def disable_all(self):
         """禁用所有回退按钮"""
+        self.initial_revert_btn.setEnabled(False)
         for widget in self.content_widget.findChildren(HistoryEntryWidget):
             widget.disable()
 
     def enable_all(self):
         """启用所有回退按钮"""
+        self.initial_revert_btn.setEnabled(True)
         for widget in self.content_widget.findChildren(HistoryEntryWidget):
             widget.enable()

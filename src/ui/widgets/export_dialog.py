@@ -766,13 +766,8 @@ class ExportDialog(QDialog):
         current_tab = self.tab_widget.currentIndex()
         
         if self.webp_radio.isChecked():
-            # WebP格式：保持当前选项卡的导出类型，只是改变编码格式
-            if current_tab == 0:
-                config.format = ExportFormat.SPRITE_SHEET  # 精灵图WebP
-            elif current_tab == 1:
-                config.format = ExportFormat.GIF  # GIF WebP
-            elif current_tab == 2:
-                config.format = ExportFormat.FRAMES  # 单帧WebP
+            # WebP格式
+            config.format = ExportFormat.WEBP
         else:
             # 原始格式或其他格式
             if current_tab == 0:

@@ -1,11 +1,25 @@
 """精灵图WebP导出器"""
+import math
 import numpy as np
 from PIL import Image
 from typing import List, Tuple, Optional
 from pathlib import Path
 
 from src.models.frame_data import FrameData
-from src.models.export_config import ExportConfig
+from src.models.export_config import ExportConfig, LayoutMode, ResampleFilter
+
+
+def get_pil_resample_filter(filter_type: ResampleFilter):
+    """将ResampleFilter枚举转换为PIL的Resampling常量"""
+    mapping = {
+        ResampleFilter.NEAREST: Image.Resampling.NEAREST,
+        ResampleFilter.BOX: Image.Resampling.BOX,
+        ResampleFilter.BILINEAR: Image.Resampling.BILINEAR,
+        ResampleFilter.HAMMING: Image.Resampling.HAMMING,
+        ResampleFilter.BICUBIC: Image.Resampling.BICUBIC,
+        ResampleFilter.LANCZOS: Image.Resampling.LANCZOS,
+    }
+    return mapping.get(filter_type, Image.Resampling.LANCZOS)
 
 
 def export_sprite_sheet_as_webp(

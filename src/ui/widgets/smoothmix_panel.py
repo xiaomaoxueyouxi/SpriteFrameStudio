@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt, Signal, Slot, QTimer, QUrl
 from PySide6.QtGui import QPixmap
 
 from src.workers.smoothmix_worker import SmoothMixWorker
+from src.utils.smoothmix_config import SMOOTHMIX_DIR
 
 
 class ImagePreview(QWidget):
@@ -451,8 +452,7 @@ class SmoothMixPanel(QWidget):
     def _start_comfyui(self):
         import subprocess
         
-        base_path = Path(__file__).parent.parent.parent.parent / "portable_output" / "SpriteFrameStudio" / "Wan2.2-SmoothMix"
-        start_bat = base_path / "start_comfyui.bat"
+        start_bat = SMOOTHMIX_DIR / "start_comfyui.bat"
         
         if not start_bat.exists():
             QMessageBox.warning(self, "错误", f"找不到启动脚本:\n{start_bat}")
@@ -476,7 +476,7 @@ class SmoothMixPanel(QWidget):
             self._log("启动 ComfyUI (端口 8188)...")
             subprocess.Popen(
                 ["cmd", "/c", str(start_bat)],
-                cwd=str(base_path),
+                cwd=str(SMOOTHMIX_DIR),
                 creationflags=subprocess.CREATE_NEW_CONSOLE
             )
             self.status_label.setText("ComfyUI (8188): 正在启动...")
