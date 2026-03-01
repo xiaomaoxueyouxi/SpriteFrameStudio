@@ -18,12 +18,17 @@ from utils.smoothmix_config import (
 )
 
 
+# 工作流类型
+WORKFLOW_SMOOTHMIX = "smoothmix"  # SmoothMix人物版
+WORKFLOW_GENERIC = "generic"      # 通用版
+
+
 class SmoothMixTask:
     """单个生成任务"""
     def __init__(self, task_id: int, start_image: str, end_image: str = "", 
                  prompt: str = "", negative_prompt: str = "", width: int = 368, height: int = 704,
                  frames: int = 33, fps: int = 16, steps: int = 4, seed: int = -1,
-                 sage_attention: bool = False):
+                 sage_attention: bool = False, workflow_type: str = WORKFLOW_SMOOTHMIX):
         self.task_id = task_id
         self.start_image = start_image
         self.end_image = end_image or start_image
@@ -36,6 +41,7 @@ class SmoothMixTask:
         self.steps = steps
         self.seed = seed if seed > 0 else random.randint(0, 2**31 - 1)
         self.sage_attention = sage_attention
+        self.workflow_type = workflow_type
         self.status = "pending"
         self.prompt_id: Optional[str] = None
         self.output_path: Optional[str] = None
@@ -78,6 +84,7 @@ class SmoothMixTask:
             "steps": self.steps,
             "seed": self.seed,
             "sage_attention": self.sage_attention,
+            "workflow_type": self.workflow_type,
             "status": self.status,
             "output_path": self.output_path,
             "error_msg": self.error_msg,
@@ -101,7 +108,8 @@ class SmoothMixTask:
             fps=data.get("fps", 16),
             steps=data.get("steps", 4),
             seed=data.get("seed", -1),
-            sage_attention=data.get("sage_attention", False)
+            sage_attention=data.get("sage_attention", False),
+            workflow_type=data.get("workflow_type", WORKFLOW_SMOOTHMIX)
         )
         task.status = data.get("status", "pending")
         task.output_path = data.get("output_path")
@@ -156,7 +164,8 @@ class SmoothMixWorker(QThread):
         
     def add_task(self, start_image: str, end_image: str = "", prompt: str = "",
                  negative_prompt: str = "", width: int = 368, height: int = 704, frames: int = 33,
-                 fps: int = 16, steps: int = 4, seed: int = -1, sage_attention: bool = False) -> int:
+                 fps: int = 16, steps: int = 4, seed: int = -1, sage_attention: bool = False,
+                 workflow_type: str = WORKFLOW_SMOOTHMIX) -> int:
         self._task_counter += 1
         task = SmoothMixTask(
             task_id=self._task_counter,
@@ -170,7 +179,8 @@ class SmoothMixWorker(QThread):
             fps=fps,
             steps=steps,
             seed=seed,
-            sage_attention=sage_attention
+            sage_attention=sage_attention,
+            workflow_type=workflow_type
         )
         self._tasks.append(task)
         self._save_tasks()  # 保存任务队列
@@ -280,8 +290,14 @@ class SmoothMixWorker(QThread):
             self._log(f"上传图片失败: {e}")
         return None
     
-    def load_workflow(self) -> Optional[Dict]:
-        workflow_path = Path(__file__).parent.parent.parent / "workflows" / "SmoothMix-FLF2V.json"
+    def load_workflow(self, workflow_type: str = WORKFLOW_SMOOTHMIX) -> Optional[Dict]:
+        """加载工作流文件"""
+        if workflow_type == WORKFLOW_GENERIC:
+            workflow_file = "Wan22-FLF2V-Generic.json"
+        else:
+            workflow_file = "SmoothMix-FLF2V.json"
+        
+        workflow_path = Path(__file__).parent.parent.parent / "workflows" / workflow_file
         if workflow_path.exists():
             with open(workflow_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
@@ -289,29 +305,49 @@ class SmoothMixWorker(QThread):
         return None
     
     def build_workflow(self, task: SmoothMixTask, start_image_name: str, end_image_name: str) -> Dict:
-        workflow = self.load_workflow()
+        workflow = self.load_workflow(task.workflow_type)
         if not workflow:
             raise ValueError("无法加载工作流模板")
         
-        workflow["237"]["inputs"]["image"] = start_image_name
-        workflow["238"]["inputs"]["image"] = end_image_name
-        workflow["241"]["inputs"]["text"] = task.prompt
-        # 负向提示词 (节点240)
-        if task.negative_prompt:
+        if task.workflow_type == WORKFLOW_GENERIC:
+            # 通用版工作流节点映射
+            workflow["52"]["inputs"]["image"] = start_image_name
+            workflow["72"]["inputs"]["image"] = end_image_name
+            workflow["6"]["inputs"]["text"] = task.prompt
+            workflow["7"]["inputs"]["text"] = task.negative_prompt
+            workflow["64"]["inputs"]["width"] = task.width
+            workflow["64"]["inputs"]["height"] = task.height
+            workflow["65"]["inputs"]["width"] = task.width
+            workflow["65"]["inputs"]["height"] = task.height
+            workflow["83"]["inputs"]["width"] = task.width
+            workflow["83"]["inputs"]["height"] = task.height
+            workflow["83"]["inputs"]["length"] = task.frames
+            workflow["101"]["inputs"]["steps"] = task.steps * 2  # 通用版步数是总步数
+            workflow["102"]["inputs"]["steps"] = task.steps * 2
+            workflow["101"]["inputs"]["end_at_step"] = task.steps
+            workflow["102"]["inputs"]["start_at_step"] = task.steps
+            workflow["101"]["inputs"]["noise_seed"] = task.seed
+            workflow["103"]["inputs"]["frame_rate"] = task.fps
+            # Sage Attention
+            sage_value = "auto" if task.sage_attention else "disabled"
+            workflow["96"]["inputs"]["sage_attention"] = sage_value
+            workflow["98"]["inputs"]["sage_attention"] = sage_value
+        else:
+            # SmoothMix版工作流节点映射
+            workflow["237"]["inputs"]["image"] = start_image_name
+            workflow["238"]["inputs"]["image"] = end_image_name
+            workflow["241"]["inputs"]["text"] = task.prompt
             workflow["240"]["inputs"]["text"] = task.negative_prompt
-        workflow["252"]["inputs"]["value"] = task.width
-        workflow["253"]["inputs"]["value"] = task.height
-        workflow["285"]["inputs"]["value"] = task.frames
-        workflow["254"]["inputs"]["value"] = task.steps
-        workflow["229"]["inputs"]["seed"] = task.seed
-        
-        # 帧率 (节点236)
-        workflow["236"]["inputs"]["frame_rate"] = task.fps
-        
-        # Sage Attention 加速 (节点265, 266)
-        sage_value = "auto" if task.sage_attention else "disabled"
-        workflow["265"]["inputs"]["sage_attention"] = sage_value
-        workflow["266"]["inputs"]["sage_attention"] = sage_value
+            workflow["252"]["inputs"]["value"] = task.width
+            workflow["253"]["inputs"]["value"] = task.height
+            workflow["285"]["inputs"]["value"] = task.frames
+            workflow["254"]["inputs"]["value"] = task.steps
+            workflow["229"]["inputs"]["seed"] = task.seed
+            workflow["236"]["inputs"]["frame_rate"] = task.fps
+            # Sage Attention
+            sage_value = "auto" if task.sage_attention else "disabled"
+            workflow["265"]["inputs"]["sage_attention"] = sage_value
+            workflow["266"]["inputs"]["sage_attention"] = sage_value
         
         return workflow
     

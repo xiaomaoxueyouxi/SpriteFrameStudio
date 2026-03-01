@@ -216,10 +216,12 @@ class SmoothMixPanel(QWidget):
         prompt_layout.addWidget(self.prompt_edit)
         
         # 负向提示词
-        prompt_layout.addWidget(QLabel("负向提示词 (可选):"))
+        prompt_layout.addWidget(QLabel("负向提示词:"))
         self.negative_prompt_edit = QTextEdit()
         self.negative_prompt_edit.setAcceptRichText(False)  # 只接受纯文本
-        self.negative_prompt_edit.setPlaceholderText("留空使用默认负向提示词...")
+        # 默认负向提示词
+        default_negative = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走, censored, mosaic censoring, bar censor, pixelated, glowing, bloom, blurry, day, out of focus, low detail, bad anatomy, ugly, overexposed, underexposed, distorted face, extra limbs, cartoonish, 3d render artifacts, duplicate people, unnatural lighting, bad composition, missing shadows, low resolution, poorly textured, glitch, noise, grain, static, motionless, still frame, overall grayish, worst quality, low quality, JPEG compression artifacts, subtitles, stylized, artwork, painting, illustration, cluttered background, many people in background, three legs, walking backward, zoom out, zoom in, mouth speaking, moving mouth, talking, speaking, mute speaking, unnatural skin tone, discolored eyelid, red eyelids, red upper eyelids, no red eyeshadow, closed eyes, no wide-open innocent eyes, poorly drawn hands, extra fingers, fused fingers, poorly drawn face, deformed, disfigured, malformed limbs, thighs, fog, mist, voluminous eyelashes, blush,"
+        self.negative_prompt_edit.setPlainText(default_negative)
         self.negative_prompt_edit.setMaximumHeight(40)
         prompt_layout.addWidget(self.negative_prompt_edit)
         
@@ -234,11 +236,34 @@ class SmoothMixPanel(QWidget):
         res_row = QHBoxLayout()
         res_row.addWidget(QLabel("分辨率:"))
         self.resolution_combo = QComboBox()
-        self.resolution_combo.addItem("368x704 (竖屏)", (368, 704))
-        self.resolution_combo.addItem("480x854 (竖屏)", (480, 854))
+        self.resolution_combo.addItem("480x864 (480p竖屏)", (480, 864))
+        self.resolution_combo.addItem("864x480 (480p横屏)", (864, 480))
+        self.resolution_combo.addItem("720x1280 (720p竖屏)", (720, 1280))
+        self.resolution_combo.addItem("1280x720 (720p横屏)", (1280, 720))
         self.resolution_combo.addItem("自定义", (None, None))
         self.resolution_combo.setMinimumWidth(120)
+        self.resolution_combo.currentIndexChanged.connect(self._on_resolution_changed)
         res_row.addWidget(self.resolution_combo)
+        
+        # 自定义分辨率输入框
+        self.custom_width_spin = QSpinBox()
+        self.custom_width_spin.setRange(128, 1920)
+        self.custom_width_spin.setValue(480)
+        self.custom_width_spin.setSingleStep(16)
+        self.custom_width_spin.setMinimumWidth(70)
+        self.custom_width_spin.setVisible(False)
+        res_row.addWidget(self.custom_width_spin)
+        self.custom_x_label = QLabel("x")
+        self.custom_x_label.setVisible(False)
+        res_row.addWidget(self.custom_x_label)
+        self.custom_height_spin = QSpinBox()
+        self.custom_height_spin.setRange(128, 1920)
+        self.custom_height_spin.setValue(854)
+        self.custom_height_spin.setSingleStep(16)
+        self.custom_height_spin.setMinimumWidth(70)
+        self.custom_height_spin.setVisible(False)
+        res_row.addWidget(self.custom_height_spin)
+        
         res_row.addStretch()
         params_layout.addLayout(res_row)
         
@@ -464,6 +489,13 @@ class SmoothMixPanel(QWidget):
         import random
         self.seed_spin.setValue(random.randint(0, 2**31 - 1))
     
+    def _on_resolution_changed(self, index):
+        """分辨率选择变化"""
+        is_custom = self.resolution_combo.currentData() == (None, None)
+        self.custom_width_spin.setVisible(is_custom)
+        self.custom_x_label.setVisible(is_custom)
+        self.custom_height_spin.setVisible(is_custom)
+    
     def _update_duration(self):
         """更新时长显示"""
         frames = self.frames_spin.value()
@@ -481,7 +513,13 @@ class SmoothMixPanel(QWidget):
         end_path = self.end_image.get_image_path()
         prompt = self.prompt_edit.toPlainText()
         negative_prompt = self.negative_prompt_edit.toPlainText()
-        width, height = self.resolution_combo.currentData() or (368, 704)
+        # 分辨率：自定义时使用输入框的值
+        res_data = self.resolution_combo.currentData()
+        if res_data == (None, None):
+            width = self.custom_width_spin.value()
+            height = self.custom_height_spin.value()
+        else:
+            width, height = res_data
         frames = self.frames_spin.value()
         fps = self.fps_spin.value()
         steps = self.steps_spin.value()
@@ -516,7 +554,6 @@ class SmoothMixPanel(QWidget):
         
         self._update_queue_list()
         self._log(f"任务 {task_id} 已添加到队列")
-        QMessageBox.information(self, "提示", f"任务 {task_id} 已添加到队列")
     
     def _ensure_worker_exists(self):
         """确保worker对象存在且可用"""
@@ -955,6 +992,7 @@ class SmoothMixPanel(QWidget):
 负向: {task.negative_prompt or '(无)'}
 
 === 参数 ===
+工作流: {"SmoothMix (人物版)" if getattr(task, 'workflow_type', 'smoothmix') == 'smoothmix' else "通用版 (动物/卡通)"}
 分辨率: {task.width}x{task.height}
 帧数: {task.frames}
 FPS: {task.fps}
