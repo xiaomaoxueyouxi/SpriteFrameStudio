@@ -350,33 +350,38 @@ class I2VPanel(QWidget):
     def _start_comfyui(self):
         """启动ComfyUI"""
         import subprocess
-        import os
         from pathlib import Path
+        from PySide6.QtCore import QTimer
         
-        # ComfyUI启动脚本路径 - 尝试多个可能的位置
-        base_path = Path(__file__).parent.parent.parent.parent
-        possible_paths = [
-            base_path / "wan2.2-14B-I2V" / "启动ComfyUI.bat",  # 便携版: 与run.bat同级
-            base_path.parent / "wan2.2-14B-I2V" / "启动ComfyUI.bat",  # 开发版: 与SpriteFrameStudio同级
-        ]
+        # 立即更新UI反馈
+        self.start_comfyui_btn.setEnabled(False)
+        self.status_label.setText("ComfyUI: 正在查找启动脚本...")
         
-        comfyui_path = None
-        for p in possible_paths:
-            if p.exists():
-                comfyui_path = p
-                break
+        def do_start():
+            base_path = Path(__file__).parent.parent.parent.parent
+            possible_paths = [
+                base_path / "wan2.2-14B-I2V" / "启动ComfyUI.bat",
+                base_path.parent / "wan2.2-14B-I2V" / "启动ComfyUI.bat",
+            ]
+            
+            comfyui_path = None
+            for p in possible_paths:
+                if p.exists():
+                    comfyui_path = p
+                    break
+            
+            if comfyui_path:
+                # 直接启动bat，避免双重shell
+                subprocess.Popen([str(comfyui_path)], shell=True, cwd=str(comfyui_path.parent))
+                self.status_label.setText("ComfyUI: 正在启动...")
+                QTimer.singleShot(3000, self._check_connection)
+                QTimer.singleShot(6000, self._check_connection)
+            else:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "错误", f"找不到ComfyUI启动脚本:\n尝试路径:\n" + "\n".join(str(p) for p in possible_paths))
+            self.start_comfyui_btn.setEnabled(True)
         
-        if comfyui_path:
-            # 在后台启动ComfyUI
-            subprocess.Popen(["cmd", "/c", str(comfyui_path)], shell=True, cwd=str(comfyui_path.parent))
-            self.status_label.setText("ComfyUI: 正在启动...")
-            # 3秒后检查连接
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(3000, self._check_connection)
-            QTimer.singleShot(6000, self._check_connection)
-        else:
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "错误", f"找不到ComfyUI启动脚本:\n尝试路径:\n" + "\n".join(str(p) for p in possible_paths))
+        QTimer.singleShot(10, do_start)
     
     def _on_resolution_changed(self, index):
         """分辨率选择改变"""
