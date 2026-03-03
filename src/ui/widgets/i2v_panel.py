@@ -378,7 +378,7 @@ class I2VPanel(QWidget):
                 QTimer.singleShot(6000, self._check_connection)
             else:
                 from PySide6.QtWidgets import QMessageBox
-                QMessageBox.warning(self, "错误", f"找不到ComfyUI启动脚本:\n尝试路径:\n" + "\n".join(str(p) for p in possible_paths))
+                QMessageBox.warning(self, "提示", "找不到ComfyUI启动脚本，请手动启动 start_comfyui.bat")
             self.start_comfyui_btn.setEnabled(True)
         
         QTimer.singleShot(10, do_start)
