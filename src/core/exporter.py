@@ -11,6 +11,8 @@ from src.models.export_config import (
     ExportConfig, ExportFormat, LayoutMode, 
     SpriteSheetMeta, FrameRect, ResampleFilter
 )
+from src.utils.pngquant import compress_png, format_file_size
+from src.core.sprite_webp_exporter import export_sprite_sheet_as_webp
 
 
 def get_pil_resample_filter(filter_type: ResampleFilter):
@@ -52,6 +54,12 @@ class Exporter:
             return (str(gif_path), None)
         elif config.format == ExportFormat.GODOT:
             return self.export_godot(frames, config)
+        elif config.format == ExportFormat.WEBP:
+            # WebP格式：根据配置决定导出类型
+            if hasattr(config, 'sprite_config') and config.sprite_config:
+                return export_sprite_sheet_as_webp(frames, config)
+            else:
+                return self.export_webp(frames, config)
         elif config.format == ExportFormat.SPRITE_SHEET:
             return self.export_sprite_sheet(frames, config)
         else:
@@ -157,6 +165,19 @@ class Exporter:
         pil_sheet = Image.fromarray(sheet)
         pil_sheet.save(str(output_path))
         
+        # PNG压缩
+        compress_info = None
+        if config.pngquant_config.enabled:
+            success, original_size, compressed_size = compress_png(
+                output_path,
+                quality_min=config.pngquant_config.quality_min,
+                quality_max=config.pngquant_config.quality_max
+            )
+            if success:
+                saved = original_size - compressed_size
+                ratio = (1 - compressed_size / original_size) * 100 if original_size > 0 else 0
+                compress_info = f"压缩: {format_file_size(original_size)} -> {format_file_size(compressed_size)} (节省 {ratio:.1f}%)"
+        
         # 生成JSON元数据
         json_path = None
         if sprite_config.generate_json:
@@ -173,7 +194,11 @@ class Exporter:
             with open(json_path, 'w', encoding='utf-8') as f:
                 json.dump(meta.model_dump(), f, indent=2, ensure_ascii=False)
         
-        return (str(output_path), str(json_path) if json_path else None)
+        result_info = str(json_path) if json_path else compress_info
+        if json_path and compress_info:
+            result_info = f"{json_path}\n{compress_info}"
+        
+        return (str(output_path), result_info)
     
     def export_gif(
         self,
@@ -236,7 +261,7 @@ class Exporter:
         self,
         frames: List[FrameData],
         config: ExportConfig
-    ) -> Tuple[str, None]:
+    ) -> Tuple[str, Optional[str]]:
         """导出单独的帧图片"""
         if not frames:
             raise ValueError("没有要导出的帧")
@@ -244,15 +269,74 @@ class Exporter:
         output_dir = config.output_path or Path(".")
         output_dir.mkdir(parents=True, exist_ok=True)
         
+        total_original = 0
+        total_compressed = 0
+        exported_files = []
+        
         for frame in frames:
             img = frame.display_image
             if img is not None:
                 pil_img = Image.fromarray(img)
                 
                 filename = f"{config.output_name}_{frame.index:04d}.png"
-                pil_img.save(str(output_dir / filename))
+                file_path = output_dir / filename
+                pil_img.save(str(file_path))
+                exported_files.append(file_path)
         
-        return (str(output_dir), None)
+        # PNG压缩
+        compress_info = None
+        if config.pngquant_config.enabled and exported_files:
+            for file_path in exported_files:
+                success, original_size, compressed_size = compress_png(
+                    file_path,
+                    quality_min=config.pngquant_config.quality_min,
+                    quality_max=config.pngquant_config.quality_max
+                )
+                if success:
+                    total_original += original_size
+                    total_compressed += compressed_size
+            
+            if total_original > 0:
+                ratio = (1 - total_compressed / total_original) * 100
+                compress_info = f"压缩: {format_file_size(total_original)} -> {format_file_size(total_compressed)} (节省 {ratio:.1f}%)"
+        
+        return (str(output_dir), compress_info)
+
+    def export_webp(
+        self,
+        frames: List[FrameData],
+        config: ExportConfig
+    ) -> Tuple[str, Optional[str]]:
+        """导出WebP格式"""
+        if not frames:
+            raise ValueError("没有要导出的帧")
+        
+        webp_config = config.webp_config
+        output_path = config.output_path or Path(".")
+        output_path.mkdir(parents=True, exist_ok=True)
+        
+        exported_files = []
+        
+        for i, frame in enumerate(frames):
+            img = frame.display_image
+            if img is not None:
+                pil_img = Image.fromarray(img)
+                
+                # 调整尺寸
+                if webp_config.frame_width and webp_config.frame_height:
+                    resample_filter = get_pil_resample_filter(webp_config.resample_filter)
+                    pil_img = pil_img.resize(
+                        (webp_config.frame_width, webp_config.frame_height),
+                        resample_filter
+                    )
+                
+                # 保存WebP文件
+                filename = f"{config.output_name}_{i:04d}.webp"
+                file_path = output_path / filename
+                pil_img.save(str(file_path), format='WebP', quality=webp_config.quality)
+                exported_files.append(file_path)
+        
+        return (str(output_path), f"导出 {len(exported_files)} 个WebP文件")
 
     def export_godot(
         self,

@@ -99,8 +99,12 @@ class FrameExtractor:
                     if self._cancel_flag:
                         break
                     
-                    # 计算对应的视频帧号
-                    frame_number = int(timestamp * video_fps)
+                    # 计算对应的视频帧号（使用四舍五入避免浮点精度问题）
+                    frame_number = round(timestamp * video_fps)
+                    
+                    # 确保帧号在有效范围内
+                    total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    frame_number = max(0, min(frame_number, total_video_frames - 1))
                     
                     # 定位到指定帧
                     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
@@ -111,7 +115,7 @@ class FrameExtractor:
                         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                         
                         frame_data = FrameData(
-                            index=idx,
+                            index=idx,  # 使用提取顺序索引，而非视频帧号
                             timestamp=timestamp,
                             image=frame_rgb
                         )
@@ -123,8 +127,8 @@ class FrameExtractor:
                         progress_callback(idx + 1, total_frames, progress)
             else:
                 # 顺序模式：一次性遍历视频，提取所需帧
-                # 计算需要提取的帧号集合
-                target_frames = {int(ts * video_fps): (idx, ts) for idx, ts in enumerate(timestamps)}
+                # 计算需要提取的帧号集合（使用四舍五入避免浮点精度问题）
+                target_frames = {round(ts * video_fps): (idx, ts) for idx, ts in enumerate(timestamps)}
                 current_frame = 0
                 
                 while True:
@@ -141,7 +145,7 @@ class FrameExtractor:
                         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                         
                         frame_data = FrameData(
-                            index=idx,
+                            index=idx,  # 使用提取顺序索引，而非视频帧号
                             timestamp=timestamp,
                             image=frame_rgb
                         )

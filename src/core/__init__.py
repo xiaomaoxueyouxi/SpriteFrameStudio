@@ -6,6 +6,7 @@ from .video_processor import VideoProcessor
 from .exporter import Exporter
 from .pose_detector import PoseDetector
 from .realesrgan_processor import RealESRGANProcessor, RealESRGANModel
+from .history_manager import HistoryManager
 
 __all__ = [
     "BackgroundRemover",
@@ -17,6 +18,7 @@ __all__ = [
     "Exporter",
     "PoseDetector",
     "RealESRGANProcessor",
-    "RealESRGANModel"
+    "RealESRGANModel",
+    "HistoryManager"
 ]
 

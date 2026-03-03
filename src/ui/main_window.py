@@ -20,12 +20,15 @@ from src.ui.widgets.frame_timeline import FrameTimeline
 from src.ui.widgets.pose_viewer import PoseViewer
 from src.ui.widgets.export_dialog import ExportDialog
 from src.ui.widgets.animation_preview import AnimationPreview
+from src.ui.widgets.history_panel import HistoryPanel
+from src.ui.widgets.smoothmix_panel import SmoothMixPanel
 
 from src.core.video_processor import VideoProcessor
 from src.core.frame_manager import FrameManager
 from src.core.background_remover import BackgroundRemover, BackgroundMode
 from src.core.pose_detector import PoseDetector
 from src.core.exporter import Exporter
+from src.core.history_manager import HistoryManager
 
 from src.workers.extraction_worker import ExtractionWorker
 from src.workers.background_worker import BackgroundWorker
@@ -42,7 +45,7 @@ class VerticalTabButton(QPushButton):
         super().__init__(text, parent)
         self.setCheckable(True)
         self.setFixedWidth(60)
-        self.setMinimumHeight(100)
+        # 移除最小高度限制，让按钮根据布局自然伸展
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         
     def paintEvent(self, event):
@@ -71,12 +74,9 @@ class VerticalTabButton(QPushButton):
         # 计算总高度
         total_height = char_height * len(text)
         
-        # 起始Y位置（居中）
-        # 确保即使在按钮高度有限的情况下也能正确居中
-        ascent = font_metrics.ascent()
-        # 计算垂直居中位置，确保文字不会超出按钮边界
-        available_height = self.height() - 40  # 预留上下边距
-        start_y = max(20, min(self.height() - total_height - 10, (self.height() - total_height) / 2 + ascent))
+        # 垂直居中：文本块中心对齐按钮中心
+        # drawText 的 y 参数是基线位置，所以需要加上 ascent
+        start_y = (self.height() - total_height) / 2 + font_metrics.ascent()
         
         # 逐字绘制
         x = self.width() / 2
@@ -84,6 +84,15 @@ class VerticalTabButton(QPushButton):
             char_width = font_metrics.horizontalAdvance(char)
             y = start_y + i * char_height
             painter.drawText(int(x - char_width / 2), int(y), char)
+        
+        # 底部分割线
+        painter.setPen(QColor("#333333"))
+        painter.drawLine(8, self.height() - 1, self.width() - 8, self.height() - 1)
+    
+    def resizeEvent(self, event):
+        """大小改变时重绘"""
+        super().resizeEvent(event)
+        self.update()
 
 
 class MainWindow(QMainWindow):
@@ -98,6 +107,7 @@ class MainWindow(QMainWindow):
         self._background_remover = BackgroundRemover()
         self._pose_detector = PoseDetector()
         self._exporter = Exporter()
+        self._history_manager = HistoryManager()
         
         # 工作线程
         self._extraction_worker: Optional[ExtractionWorker] = None
@@ -113,13 +123,11 @@ class MainWindow(QMainWindow):
         # 垂直Tab按钮列表
         self.tab_buttons = []
         
-        self.setup_ui()
-        self.setup_connections()
-        
-        # 性能监控定时器
+        # 性能监控定时器（必须在 setup_ui 之前创建）
         self.performance_timer = QTimer(self)
         self.performance_timer.timeout.connect(self.update_performance_stats)
-        self.performance_timer.start(1000)  # 每秒更新一次
+        
+        self.setup_ui()
     
     def _apply_flow_btn_style(self, button: QPushButton):
         """为主要操作按钮应用统一样式"""
@@ -134,9 +142,49 @@ class MainWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
-        main_layout = QHBoxLayout(central_widget)
+        # 顶层布局：顶部Tab + 主内容区
+        root_layout = QVBoxLayout(central_widget)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+        
+        # ===== 顶部横向Tab =====
+        self.top_tab_widget = QTabWidget()
+        self.top_tab_widget.setStyleSheet("""
+            QTabWidget::pane { border: none; }
+            QTabBar::tab {
+                background-color: #1e1e1e;
+                color: #888;
+                padding: 8px 20px;
+                border: none;
+                border-bottom: 2px solid transparent;
+            }
+            QTabBar::tab:selected {
+                color: #fff;
+                border-bottom: 2px solid #0078d4;
+            }
+            QTabBar::tab:hover {
+                color: #fff;
+            }
+        """)
+        root_layout.addWidget(self.top_tab_widget)
+        
+        # Tab1: 帧处理（现有功能）
+        frame_process_widget = QWidget()
+        main_layout = QHBoxLayout(frame_process_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
+        self.top_tab_widget.addTab(frame_process_widget, "帧处理")
+        
+        # Tab2: SmoothMix视频生成
+        self.smoothmix_panel = SmoothMixPanel()
+        self.smoothmix_panel.video_generated.connect(self._on_i2v_video_generated)
+        self.smoothmix_panel.status_changed.connect(self._on_i2v_status_changed)
+        self.top_tab_widget.addTab(self.smoothmix_panel, "视频生成")
+
+        # Tab3: 作者信息
+        from src.ui.widgets.about_panel import AboutPanel
+        self.about_panel = AboutPanel()
+        self.top_tab_widget.addTab(self.about_panel, "关于")
         
         # ===== 左侧：垂直Tab栏 =====
         self.vertical_tab_bar = QWidget()
@@ -174,18 +222,19 @@ class MainWindow(QMainWindow):
         if self.tab_buttons:
             self.tab_buttons[0].setChecked(True)
         
-        tab_bar_layout.addStretch()
+        # 窗口显示后刷新按钮布局
+        QTimer.singleShot(100, self._refresh_tab_buttons)
+        
         main_layout.addWidget(self.vertical_tab_bar)
         
         # ===== 中间：操作面板 =====
         self.sidebar_widget = QWidget()
         self.sidebar_widget.setObjectName("sidebar")
         self.sidebar_widget.setFixedWidth(360)
-        # 不设置自定义样式，使用Qt默认样式（与导出设置对话框一致）
         
         sidebar_layout = QVBoxLayout(self.sidebar_widget)
-        sidebar_layout.setContentsMargins(10, 10, 10, 10)
-        sidebar_layout.setSpacing(10)
+        sidebar_layout.setContentsMargins(5, 5, 5, 5)
+        sidebar_layout.setSpacing(5)
         
         # 使用StackedWidget管理不同页面
         self.page_stack = QStackedWidget()
@@ -193,7 +242,29 @@ class MainWindow(QMainWindow):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # 禁用横向滚动条
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)  # 垂直滚动条按需显示
         scroll.setWidget(self.page_stack)
+        # 设置滚动条样式，不遮挡内容
+        scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+            }
+            QScrollBar:vertical {
+                width: 8px;
+                background: transparent;
+            }
+            QScrollBar::handle:vertical {
+                background: #555;
+                border-radius: 4px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #777;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
         
         sidebar_layout.addWidget(scroll)
         main_layout.addWidget(self.sidebar_widget)
@@ -207,6 +278,14 @@ class MainWindow(QMainWindow):
         
         # 状态栏
         self._create_statusbar()
+        
+        # 所有UI组件创建完成后，建立连接
+        self.setup_connections()
+    
+    def _refresh_tab_buttons(self):
+        """刷新Tab按钮显示"""
+        for btn in self.tab_buttons:
+            btn.update()
     
     def _on_vertical_tab_button_clicked(self, button):
         """垂直Tab按钮点击事件"""
@@ -226,40 +305,42 @@ class MainWindow(QMainWindow):
         page1 = self._create_pose_page()
         self.page_stack.addWidget(page1)
         
-        # 页面2: 批量缩放
+        # 页面3: 批量缩放
         page2 = self._create_scale_page()
         self.page_stack.addWidget(page2)
         
-        # 页面3: 背景处理
+        # 页面4: 背景处理
         page3 = self._create_background_page()
         self.page_stack.addWidget(page3)
         
-        # 页面4: 边缘优化
+        # 页面5: 边缘优化
         page4 = self._create_edge_page()
         self.page_stack.addWidget(page4)
         
-        # 页面5: 描边
+        # 页面6: 描边
         page5 = self._create_outline_page()
         self.page_stack.addWidget(page5)
         
-        # 页面6: 空白裁剪
+        # 页面7: 空白裁剪
         page6 = self._create_crop_page()
         self.page_stack.addWidget(page6)
         
-        # 页面7: 图像增强
+        # 页面8: 图像增强
         page7 = self._create_enhance_page()
         self.page_stack.addWidget(page7)
         
-        # 页面8: 导出
+        # 页面9: 导出
         page8 = self._create_export_page()
         self.page_stack.addWidget(page8)
+        # 注意：setup_connections 移到 _create_center_panel 之后调用
     
     def _create_video_page(self) -> QWidget:
         """创建准备视频页面"""
         page = QWidget()
+        # 不限制高度，让内容自然展开
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(15)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(12)
         
         # 打开视频
         self.open_btn = QPushButton("📁 打开本地视频")
@@ -286,7 +367,7 @@ class MainWindow(QMainWindow):
         fps_row = QHBoxLayout()
         fps_row.addWidget(QLabel("🎬 帧率:"))
         self.fps_spin = QDoubleSpinBox()
-        self.fps_spin.setRange(0.1, 60)
+        self.fps_spin.setRange(config.EXTRACT_FPS_MIN, config.EXTRACT_FPS_MAX)
         self.fps_spin.setValue(config.extract_fps)
         self.fps_spin.setSuffix(" fps")
         fps_row.addWidget(self.fps_spin)
@@ -322,6 +403,7 @@ class MainWindow(QMainWindow):
     def _create_scale_page(self) -> QWidget:
         """创建批量缩放页面"""
         page = QWidget()
+        page.setMaximumHeight(350)
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(15)
@@ -348,8 +430,8 @@ class MainWindow(QMainWindow):
         percent_layout.setContentsMargins(0, 0, 0, 0)
         percent_layout.addWidget(QLabel("缩放比例:"))
         self.scale_percent_spin = QSpinBox()
-        self.scale_percent_spin.setRange(10, 200)
-        self.scale_percent_spin.setValue(50)
+        self.scale_percent_spin.setRange(config.SCALE_PERCENT_MIN, config.SCALE_PERCENT_MAX)
+        self.scale_percent_spin.setValue(config.SCALE_PERCENT_DEFAULT)
         self.scale_percent_spin.setSuffix("%")
         percent_layout.addWidget(self.scale_percent_spin)
         percent_layout.addStretch()
@@ -364,14 +446,14 @@ class MainWindow(QMainWindow):
         size_row = QHBoxLayout()
         size_row.addWidget(QLabel("宽:"))
         self.scale_width_spin = QSpinBox()
-        self.scale_width_spin.setRange(1, 4096)
-        self.scale_width_spin.setValue(512)
+        self.scale_width_spin.setRange(config.SCALE_SIZE_MIN, config.SCALE_SIZE_MAX)
+        self.scale_width_spin.setValue(config.SCALE_WIDTH_DEFAULT)
         self.scale_width_spin.valueChanged.connect(self._on_scale_width_changed)
         size_row.addWidget(self.scale_width_spin)
         size_row.addWidget(QLabel("高:"))
         self.scale_height_spin = QSpinBox()
-        self.scale_height_spin.setRange(1, 4096)
-        self.scale_height_spin.setValue(512)
+        self.scale_height_spin.setRange(config.SCALE_SIZE_MIN, config.SCALE_SIZE_MAX)
+        self.scale_height_spin.setValue(config.SCALE_HEIGHT_DEFAULT)
         self.scale_height_spin.valueChanged.connect(self._on_scale_height_changed)
         size_row.addWidget(self.scale_height_spin)
         self.scale_lock_ratio_check = QCheckBox("🔒锁定比例")
@@ -412,6 +494,7 @@ class MainWindow(QMainWindow):
     def _create_pose_page(self) -> QWidget:
         """创建动作分析页面"""
         page = QWidget()
+        page.setMaximumHeight(400)
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(15)
@@ -457,8 +540,8 @@ class MainWindow(QMainWindow):
         sim_row = QHBoxLayout()
         sim_row.addWidget(QLabel("相似度阈值:"))
         self.similarity_spin = QSpinBox()
-        self.similarity_spin.setRange(50, 99)
-        self.similarity_spin.setValue(90)  # 默认90%
+        self.similarity_spin.setRange(config.SIMILARITY_MIN, config.SIMILARITY_MAX)
+        self.similarity_spin.setValue(config.SIMILARITY_DEFAULT)
         self.similarity_spin.setSuffix("%")
         sim_row.addWidget(self.similarity_spin)
         sim_row.addStretch()
@@ -468,8 +551,8 @@ class MainWindow(QMainWindow):
         interval_row = QHBoxLayout()
         interval_row.addWidget(QLabel("帧间隔:"))
         self.interval_spin = QSpinBox()
-        self.interval_spin.setRange(1, 30)
-        self.interval_spin.setValue(10)  # 默认10帧
+        self.interval_spin.setRange(config.INTERVAL_MIN, config.INTERVAL_MAX)
+        self.interval_spin.setValue(config.INTERVAL_DEFAULT)
         self.interval_spin.setSuffix(" 帧")
         interval_row.addWidget(self.interval_spin)
         interval_row.addStretch()
@@ -483,6 +566,7 @@ class MainWindow(QMainWindow):
     def _create_background_page(self) -> QWidget:
         """创建背景处理页面"""
         page = QWidget()
+        page.setMaximumHeight(400)
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(15)
@@ -515,8 +599,8 @@ class MainWindow(QMainWindow):
         feather_row = QHBoxLayout()
         feather_row.addWidget(QLabel("羽化:"))
         self.color_feather_spin = QSpinBox()
-        self.color_feather_spin.setRange(0, 20)
-        self.color_feather_spin.setValue(0)
+        self.color_feather_spin.setRange(0, config.COLOR_FEATHER_MAX)
+        self.color_feather_spin.setValue(config.COLOR_FEATHER_DEFAULT)
         feather_row.addWidget(self.color_feather_spin)
         feather_row.addStretch()
         cc_layout.addLayout(feather_row)
@@ -525,8 +609,8 @@ class MainWindow(QMainWindow):
         denoise_row = QHBoxLayout()
         denoise_row.addWidget(QLabel("去噪:"))
         self.denoise_spin = QSpinBox()
-        self.denoise_spin.setRange(0, 10)
-        self.denoise_spin.setValue(1)
+        self.denoise_spin.setRange(0, config.DENOISE_MAX)
+        self.denoise_spin.setValue(config.DENOISE_DEFAULT)
         denoise_row.addWidget(self.denoise_spin)
         denoise_row.addStretch()
         cc_layout.addLayout(denoise_row)
@@ -545,12 +629,12 @@ class MainWindow(QMainWindow):
         h_row.addWidget(QLabel("H:"))
         self.h_min_spin = QSpinBox()
         self.h_min_spin.setRange(0, 255)
-        self.h_min_spin.setValue(35)
+        self.h_min_spin.setValue(config.GREENSCREEN_H_MIN)
         h_row.addWidget(self.h_min_spin)
         h_row.addWidget(QLabel("-"))
         self.h_max_spin = QSpinBox()
         self.h_max_spin.setRange(0, 255)
-        self.h_max_spin.setValue(85)
+        self.h_max_spin.setValue(config.GREENSCREEN_H_MAX)
         h_row.addWidget(self.h_max_spin)
         h_row.addStretch()
         cp_layout.addLayout(h_row)
@@ -560,12 +644,12 @@ class MainWindow(QMainWindow):
         s_row.addWidget(QLabel("S:"))
         self.s_min_spin = QSpinBox()
         self.s_min_spin.setRange(0, 255)
-        self.s_min_spin.setValue(50)
+        self.s_min_spin.setValue(config.GREENSCREEN_S_MIN)
         s_row.addWidget(self.s_min_spin)
         s_row.addWidget(QLabel("-"))
         self.s_max_spin = QSpinBox()
         self.s_max_spin.setRange(0, 255)
-        self.s_max_spin.setValue(255)
+        self.s_max_spin.setValue(config.GREENSCREEN_S_MAX)
         s_row.addWidget(self.s_max_spin)
         s_row.addStretch()
         cp_layout.addLayout(s_row)
@@ -575,12 +659,12 @@ class MainWindow(QMainWindow):
         v_row.addWidget(QLabel("V:"))
         self.v_min_spin = QSpinBox()
         self.v_min_spin.setRange(0, 255)
-        self.v_min_spin.setValue(50)
+        self.v_min_spin.setValue(config.GREENSCREEN_V_MIN)
         v_row.addWidget(self.v_min_spin)
         v_row.addWidget(QLabel("-"))
         self.v_max_spin = QSpinBox()
         self.v_max_spin.setRange(0, 255)
-        self.v_max_spin.setValue(255)
+        self.v_max_spin.setValue(config.GREENSCREEN_V_MAX)
         v_row.addWidget(self.v_max_spin)
         v_row.addStretch()
         cp_layout.addLayout(v_row)
@@ -589,8 +673,8 @@ class MainWindow(QMainWindow):
         spill_row = QHBoxLayout()
         spill_row.addWidget(QLabel("溢色:"))
         self.spill_spin = QSpinBox()
-        self.spill_spin.setRange(0, 100)
-        self.spill_spin.setValue(0)
+        self.spill_spin.setRange(0, config.SPILL_MAX)
+        self.spill_spin.setValue(config.SPILL_DEFAULT)
         spill_row.addWidget(self.spill_spin)
         spill_row.addStretch()
         cp_layout.addLayout(spill_row)
@@ -661,8 +745,8 @@ class MainWindow(QMainWindow):
         params_layout = QHBoxLayout()
         params_layout.addWidget(QLabel("边缘收缩:"))
         self.edge_erode_spin = QSpinBox()
-        self.edge_erode_spin.setRange(0, 10)
-        self.edge_erode_spin.setValue(0)
+        self.edge_erode_spin.setRange(0, config.EDGE_ERODE_MAX)
+        self.edge_erode_spin.setValue(config.EDGE_ERODE_DEFAULT)
         self.edge_erode_spin.setSuffix(" px")
         params_layout.addWidget(self.edge_erode_spin)
         params_layout.addStretch()
@@ -905,6 +989,9 @@ class MainWindow(QMainWindow):
         video_layout.addWidget(self.video_player)
         self.tab_widget.addTab(video_tab, "视频预览")
         
+        # 启动性能监控定时器
+        self.performance_timer.start(1000)
+        
         # 帧管理Tab
         frame_tab = QWidget()
         frame_layout = QVBoxLayout(frame_tab)
@@ -924,8 +1011,14 @@ class MainWindow(QMainWindow):
         anim_layout = QVBoxLayout(anim_tab)
         self.animation_preview = AnimationPreview()
         anim_layout.addWidget(self.animation_preview)
-        
         self.tab_widget.addTab(anim_tab, "动画预览")
+        
+        # 历史记录Tab
+        history_tab = QWidget()
+        history_layout = QVBoxLayout(history_tab)
+        self.history_panel = HistoryPanel()
+        history_layout.addWidget(self.history_panel)
+        self.tab_widget.addTab(history_tab, "历史记录")
         
         return panel
     
@@ -954,6 +1047,10 @@ class MainWindow(QMainWindow):
     
     def update_performance_stats(self):
         """更新性能统计信息"""
+        # 安全检查：确保 video_player 存在且已初始化
+        if not hasattr(self, 'video_player') or self.video_player is None:
+            return
+            
         if hasattr(self.video_player, 'get_performance_stats'):
             stats = self.video_player.get_performance_stats()
             avg_time = stats['average_frame_display_time'] * 1000  # 转换为毫秒
@@ -965,6 +1062,10 @@ class MainWindow(QMainWindow):
     
     def reset_performance_stats(self):
         """重置性能统计信息"""
+        # 安全检查
+        if not hasattr(self, 'video_player') or self.video_player is None:
+            return
+            
         if hasattr(self.video_player, 'reset_performance_stats'):
             self.video_player.reset_performance_stats()
             self.performance_label.setText("性能: 就绪")
@@ -982,11 +1083,34 @@ class MainWindow(QMainWindow):
         self.frame_preview.selection_changed.connect(self._on_selection_changed)
         self.frame_preview.status_message.connect(self.status_label.setText)
         self.frame_preview.export_single_frame.connect(self.export_single_frame)
+        self.frame_preview.image_edited.connect(self._on_frame_image_edited)
         
         # Tab切换
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
+        
+        # 历史记录回退
+        self.history_panel.revert_requested.connect(self._on_history_revert)
     
     # ============ 槽函数 ============
+    
+    @Slot(int)
+    def _on_history_revert(self, step_id: int):
+        """历史记录回退"""
+        affected = self._history_manager.revert_to(step_id, self._frame_manager)
+
+        # 刷新受影响帧的预览
+        for idx in affected:
+            frame = self._frame_manager.get_frame(idx)
+            if frame and frame.display_image is not None:
+                self.frame_preview.update_frame(idx, frame.display_image)
+
+        # 刷新动画预览
+        self._update_animation_preview()
+
+        # 刷新历史面板
+        self.history_panel.refresh(self._history_manager.get_entries(), self._history_manager.get_memory_usage())
+
+        self.status_label.setText(f"已回退到初始状态" if step_id == 0 else f"已回退到步骤 #{step_id}")
     
     @Slot()
     def open_video(self):
@@ -1033,6 +1157,10 @@ class MainWindow(QMainWindow):
             
             # 启用功能
             self.extract_btn.setEnabled(True)
+            
+            # 根据视频帧率自动设置抽帧帧数（保持与视频原始帧率一致）
+            video_fps = self._video_info.fps
+            self.fps_spin.setValue(video_fps)
             
             # 清空旧数据，重置所有状态
             self._frame_manager.clear()
@@ -1193,7 +1321,25 @@ class MainWindow(QMainWindow):
         self._background_worker.finished.connect(self._on_bg_finished)
         self._background_worker.error.connect(self._on_bg_error)
         
+        # 创建快照
+        if mode == BackgroundMode.AI:
+            model_name = ai_params.get('model', 'u2net') if ai_params else 'u2net'
+            description = f"AI抠图 {model_name} | {len(selected_indices)}帧"
+        else:
+            # 颜色模式：显示HSV范围
+            lower = color_params.get('lower', (0, 0, 0)) if color_params else (0, 0, 0)
+            upper = color_params.get('upper', (180, 255, 255)) if color_params else (180, 255, 255)
+            description = f"颜色过滤 HSV({lower[0]}-{upper[0]}, {lower[1]}-{upper[1]}, {lower[2]}-{upper[2]}) | {len(selected_indices)}帧"
+        
+        self._history_manager.push_snapshot(
+            "背景处理",
+            description,
+            selected_indices,
+            self._frame_manager
+        )
+        
         # 开始处理
+        self.statusBar().clearMessage()  # 清除状态栏消息，确保status_label可见
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
         self.remove_bg_btn.setEnabled(False)
@@ -1359,6 +1505,14 @@ class MainWindow(QMainWindow):
             self.outline_color.blue()
         )
         
+        # 创建快照
+        self._history_manager.push_snapshot(
+            "描边",
+            f"描边 {thickness}px RGB{color} | {len(selected_indices)}帧",
+            selected_indices,
+            self._frame_manager
+        )
+        
         self.status_label.setText(f"正在添加描边... 0/{len(selected_indices)}")
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
@@ -1399,6 +1553,9 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.add_outline_btn.setEnabled(True)
         self.status_label.setText(f"描边完成：{processed_count} 帧")
+        
+        # 刷新历史面板
+        self.history_panel.refresh(self._history_manager.get_entries(), self._history_manager.get_memory_usage())
         
         if processed_count < len(selected_indices):
             skipped = len(selected_indices) - processed_count
@@ -1448,6 +1605,14 @@ class MainWindow(QMainWindow):
         if not frames:
             QMessageBox.information(self, "提示", "所选帧没有可用的图像数据")
             return
+        
+        # 创建快照
+        self._history_manager.push_snapshot(
+            "图像增强",
+            f"Real-ESRGAN {model_name} tile={tile} | {len(frames)}帧",
+            [idx for idx, _ in frames],
+            self._frame_manager
+        )
         
         # 断开旧的信号连接（如果存在）
         if hasattr(self, 'enhance_worker') and self.enhance_worker:
@@ -1519,6 +1684,9 @@ class MainWindow(QMainWindow):
         selected_count = len(self.frame_preview.get_selected_indices())
         self.status_label.setText(f"增强完成：{selected_count} 帧")
         
+        # 刷新历史面板
+        self.history_panel.refresh(self._history_manager.get_entries(), self._history_manager.get_memory_usage())
+        
         QMessageBox.information(
             self, "增强完成",
             f"已成功增强 {selected_count} 帧"
@@ -1546,6 +1714,14 @@ class MainWindow(QMainWindow):
         if edge_erode <= 0:
             QMessageBox.information(self, "提示", "边缘收缩必须大于0")
             return
+        
+        # 创建快照
+        self._history_manager.push_snapshot(
+            "边缘优化",
+            f"边缘收缩 {edge_erode}px | {len(selected_indices)}帧",
+            selected_indices,
+            self._frame_manager
+        )
         
         self.status_label.setText(f"正在优化边缘... 0/{len(selected_indices)}")
         self.progress_bar.setVisible(True)
@@ -1595,6 +1771,9 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.edge_optimize_btn.setEnabled(True)
         self.status_label.setText(f"边缘优化完成：{processed_count} 帧")
+        
+        # 刷新历史面板
+        self.history_panel.refresh(self._history_manager.get_entries(), self._history_manager.get_memory_usage())
         
         if processed_count < len(selected_indices):
             skipped = len(selected_indices) - processed_count
@@ -1675,6 +1854,14 @@ class MainWindow(QMainWindow):
         crop_width = max_x - min_x + 1
         crop_height = max_y - min_y + 1
         
+        # 创建快照
+        self._history_manager.push_snapshot(
+            "空白裁剪",
+            f"裁剪 {img_width}x{img_height}→{crop_width}x{crop_height} 边距({margin_top},{margin_bottom},{margin_left},{margin_right}) | {len(selected_indices)}帧",
+            selected_indices,
+            self._frame_manager
+        )
+        
         # 第二步：应用裁剪到所有选中的帧
         self.status_label.setText(f"正在裁剪 {len(selected_indices)} 帧...")
         QApplication.processEvents()
@@ -1697,6 +1884,10 @@ class MainWindow(QMainWindow):
         self._update_animation_preview()
         
         self.status_label.setText(f"裁剪完成：{cropped_count} 帧 ({crop_width}x{crop_height})")
+        
+        # 刷新历史面板
+        self.history_panel.refresh(self._history_manager.get_entries(), self._history_manager.get_memory_usage())
+        
         QMessageBox.information(
             self, "裁剪完成",
             f"已裁剪 {cropped_count} 帧\n"
@@ -1803,7 +1994,11 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "错误", f"帧提取失败: {error}")
     
     def _on_bg_progress(self, current: int, total: int, percent: float):
-        self.progress_bar.setValue(int(percent))
+        # 确保进度值在合理范围内
+        progress_value = max(0, min(100, int(percent)))
+        self.progress_bar.setValue(progress_value)
+        # 更新状态栏显示具体进度
+        self.status_label.setText(f"正在去除背景... {current}/{total} ({progress_value}%)")
     
     def _on_bg_status(self, status: str):
         self.status_label.setText(status)
@@ -1820,6 +2015,12 @@ class MainWindow(QMainWindow):
         self.remove_bg_btn.setEnabled(True)
         self.edge_optimize_btn.setEnabled(True)  # 抠图完成后启用边缘优化
         self.status_label.setText("背景去除完成")
+        
+        # 更新动画预览（重要：立即刷新显示效果）
+        self._update_animation_preview()
+        
+        # 刷新历史面板
+        self.history_panel.refresh(self._history_manager.get_entries(), self._history_manager.get_memory_usage())
     
     def _on_bg_error(self, error: str):
         self.progress_bar.setVisible(False)
@@ -2076,6 +2277,14 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.Yes:
             return
         
+        # 创建快照
+        self._history_manager.push_snapshot(
+            "批量缩放",
+            f"{len(selected_indices)}帧 {orig_w}x{orig_h}→{target_w}x{target_h} {self.scale_algorithm_combo.currentText()}",
+            selected_indices,
+            self._frame_manager
+        )
+        
         # 开始缩放
         self.status_label.setText(f"正在缩放 {len(selected_indices)} 帧...")
         self.progress_bar.setVisible(True)
@@ -2113,6 +2322,10 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.scale_frames_btn.setEnabled(True)
         self.status_label.setText(f"缩放完成：{scaled_count} 帧 ({orig_w}x{orig_h} → {target_w}x{target_h})")
+        
+        # 刷新历史面板
+        self.history_panel.refresh(self._history_manager.get_entries(), self._history_manager.get_memory_usage())
+        
         QMessageBox.information(
             self, "缩放完成",
             f"已缩放 {scaled_count} 帧\n"
@@ -2424,12 +2637,39 @@ class MainWindow(QMainWindow):
             pose = self._frame_manager.get_pose_for_frame(frame_index)
             self.pose_viewer.set_image_and_pose(frame.image, pose)
     
+    @Slot(int, np.ndarray)
+    def _on_frame_image_edited(self, frame_index: int, edited_image: np.ndarray):
+        """帧图像被编辑（魔棒工具）"""
+        frame = self._frame_manager.get_frame(frame_index)
+        if frame:
+            self._history_manager.push_snapshot(
+                "魔棒编辑",
+                f"手动编辑帧 #{frame_index}",
+                [frame_index],
+                self._frame_manager
+            )
+            
+            self._frame_manager.update_frame_image(frame_index, edited_image, processed=True)
+            
+            self._update_animation_preview()
+            
+            self.history_panel.refresh(
+                self._history_manager.get_entries(),
+                self._history_manager.get_memory_usage()
+            )
+            
+            self.status_label.setText(f"帧 #{frame_index} 已编辑")
+    
     def _on_selection_changed(self, selected_indices: list):
         """选择变化"""
         # 同步到frame_manager
         self._frame_manager.deselect_all()
-        for idx in selected_indices:
-            self._frame_manager.select_frame(idx, True)
+        
+        # 遍历所有帧，根据原始帧号设置选中状态
+        for i, frame in enumerate(self._frame_manager.frames):
+            if frame.index in selected_indices:
+                self._frame_manager.select_frame(i, True)
+        
         # 更新状态栏显示
         self._update_frame_count()
         
@@ -2480,16 +2720,19 @@ class MainWindow(QMainWindow):
             self.animation_preview.set_frames([])
             return
         
-        # 获取图像和时间戳
+        # 获取选中的帧数据（直接使用selected_frames属性，避免索引混淆）
+        selected_frames = self._frame_manager.selected_frames
+        
+        # 按时间戳排序以确保正确的播放顺序
+        sorted_frames = sorted(selected_frames, key=lambda f: f.timestamp)
+        
+        # 提取图像和时间戳
         images = []
         timestamps = []
-        for idx in selected_indices:
-            frame = self._frame_manager.get_frame(idx)
-            if frame:
-                img = frame.display_image
-                if img is not None:
-                    images.append(img)
-                    timestamps.append(frame.timestamp)
+        for frame in sorted_frames:
+            if frame.display_image is not None:
+                images.append(frame.display_image)
+                timestamps.append(frame.timestamp)
         
         print(f"[DEBUG] 实际加载 {len(images)} 帧到动画预览")  # 调试信息
         
@@ -2598,47 +2841,118 @@ class MainWindow(QMainWindow):
     
     def _show_similar_frames_result(self, similar_frames):
         """显示相似帧结果"""
-        from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit, QPushButton, QScrollArea
+        from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
+                                       QPushButton, QScrollArea, QWidget, QFrame)
         from PySide6.QtCore import Qt
         
         dialog = QDialog(self)
         dialog.setWindowTitle("最相似帧分析结果")
-        dialog.resize(500, 400)
+        dialog.resize(550, 450)
         
         layout = QVBoxLayout(dialog)
         
-        # 结果文本
-        result_text = "最相似帧分析结果\n\n"
-        result_text += f"共分析 {len(similar_frames)} 帧\n\n"
-        result_text += "按相似度从高到低排序:\n\n"
-        
-        for i, item in enumerate(similar_frames, 1):
-            frame_idx = item["frame_index"]
-            similar_idx = item["similar_frame_index"]
-            similarity = item["similarity"] * 100
-            result_text += f"{i}. 帧 {frame_idx} 的最相似帧是 帧 {similar_idx} (相似度: {similarity:.2f}%)\n"
-        
-        # 文本编辑框
-        text_edit = QTextEdit()
-        text_edit.setPlainText(result_text)
-        text_edit.setReadOnly(True)
+        # 标题和统计信息
+        header_label = QLabel(f"共分析 {len(similar_frames)} 帧，按相似度从高到低排序")
+        header_label.setStyleSheet("font-weight: bold; padding: 5px; color: white;")
+        layout.addWidget(header_label)
         
         # 滚动区域
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setWidget(text_edit)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        
+        # 列表容器
+        list_widget = QWidget()
+        list_layout = QVBoxLayout(list_widget)
+        list_layout.setSpacing(5)
+        list_layout.setContentsMargins(5, 5, 5, 5)
+        
+        # 创建每一行
+        for i, item in enumerate(similar_frames, 1):
+            frame_idx = item["frame_index"]
+            similar_idx = item["similar_frame_index"]
+            similarity = item["similarity"] * 100
+            
+            # 行容器
+            row_frame = QFrame()
+            row_frame.setFrameShape(QFrame.StyledPanel)
+            row_frame.setStyleSheet("""
+                QFrame {
+                    background-color: #f5f5f5;
+                    border: 1px solid #ddd;
+                    border-radius: 4px;
+                    padding: 5px;
+                }
+                QFrame:hover {
+                    background-color: #e8e8e8;
+                }
+            """)
+            row_layout = QHBoxLayout(row_frame)
+            row_layout.setContentsMargins(10, 5, 10, 5)
+            
+            # 序号
+            num_label = QLabel(f"{i}.")
+            num_label.setFixedWidth(30)
+            num_label.setStyleSheet("font-weight: bold; color: #666;")
+            row_layout.addWidget(num_label)
+            
+            # 帧信息
+            info_label = QLabel(f"帧 {frame_idx} 的最相似帧是 帧 {similar_idx}")
+            info_label.setStyleSheet("font-size: 13px; color: #333;")
+            row_layout.addWidget(info_label, 1)
+            
+            # 相似度
+            similarity_label = QLabel(f"{similarity:.2f}%")
+            similarity_label.setFixedWidth(70)
+            similarity_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            similarity_label.setStyleSheet("color: #2196F3; font-weight: bold;")
+            row_layout.addWidget(similarity_label)
+            
+            # 使用按钮
+            use_btn = QPushButton("使用")
+            use_btn.setFixedWidth(60)
+            use_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #4CAF50;
+                    color: white;
+                    border: none;
+                    border-radius: 3px;
+                    padding: 5px 10px;
+                }
+                QPushButton:hover {
+                    background-color: #45a049;
+                }
+                QPushButton:pressed {
+                    background-color: #3d8b40;
+                }
+            """)
+            
+            # 点击使用按钮时选中帧（不选最后一帧）
+            def make_use_callback(fidx, sidx):
+                def callback():
+                    # 选中从 frame_idx 到 similar_idx-1 的帧（不包含最后一帧）
+                    start = min(fidx, sidx)
+                    end = max(fidx, sidx)
+                    # 不选最后一帧
+                    indices_to_select = list(range(start, end))
+                    if indices_to_select:
+                        self.frame_preview.select_indices(indices_to_select)
+                        self.status_label.setText(f"已选中帧 {start} - {end-1}，共 {len(indices_to_select)} 帧")
+                    dialog.accept()
+                return callback
+            
+            use_btn.clicked.connect(make_use_callback(frame_idx, similar_idx))
+            row_layout.addWidget(use_btn)
+            
+            list_layout.addWidget(row_frame)
+        
+        list_layout.addStretch()
+        scroll_area.setWidget(list_widget)
         layout.addWidget(scroll_area, 1)
         
-        # 按钮布局
+        # 底部按钮布局
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
-        
-        # 复制按钮
-        copy_btn = QPushButton("复制结果")
-        def copy_result():
-            dialog.clipboard().setText(result_text)
-        copy_btn.clicked.connect(copy_result)
-        btn_layout.addWidget(copy_btn)
         
         # 关闭按钮
         close_btn = QPushButton("关闭")
@@ -2648,6 +2962,77 @@ class MainWindow(QMainWindow):
         layout.addLayout(btn_layout)
         
         dialog.exec()
+    
+    @Slot(str)
+    def _on_i2v_video_generated(self, video_path: str):
+        """I2V视频生成完成处理"""
+        # 自动加载生成的视频
+        self._load_generated_video(video_path)
+    
+    @Slot(str)
+    def _on_i2v_status_changed(self, status: str):
+        """I2V状态更新处理"""
+        self.statusBar().showMessage(status)
+    
+    def _load_generated_video(self, video_path: str):
+        """加载生成的视频到处理流程"""
+        from pathlib import Path
+        if not Path(video_path).exists():
+            return
+        
+        # 复用正常的视频加载流程
+        self._video_info = self.video_player.load_video(video_path)
+        
+        if self._video_info:
+            filename = Path(video_path).name
+            self.video_path_label.setText(filename)
+            self.video_path_label.setToolTip(filename)
+            self.video_info_label.setText(
+                f"分辨率: {self._video_info.resolution}\n"
+                f"帧率: {self._video_info.fps:.2f} fps\n"
+                f"时长: {self._video_info.format_duration()}"
+            )
+            
+            # 设置时间轴
+            self.timeline.set_duration(self._video_info.duration)
+            self.timeline.set_fps(self._video_info.fps)
+            self.video_player.set_playback_range(*self.timeline.get_range())
+            self.video_player.set_range_playback_enabled(self.range_play_check.isChecked())
+            
+            # 启用功能
+            self.extract_btn.setEnabled(True)
+            self.fps_spin.setValue(self._video_info.fps)
+            
+            # 清空旧数据
+            self._frame_manager.clear()
+            self.frame_preview.clear()
+            
+            # 切换到帧处理Tab，然后切换到准备视频页面
+            self.top_tab_widget.setCurrentIndex(0)
+            self.page_stack.setCurrentIndex(0)
+            self.tab_buttons[0].setChecked(True)
+            
+            self.statusBar().showMessage(f"已加载生成的视频: {filename}")
+    
+    def switch_to_prepare_video_tab(self):
+        """切换到准备视频Tab (索引0)"""
+        self.page_stack.setCurrentIndex(0)
+        if self.tab_buttons and len(self.tab_buttons) > 0:
+            # 取消其他按钮选中
+            for btn in self.tab_buttons:
+                btn.setChecked(False)
+            # 选中第一个按钮
+            self.tab_buttons[0].setChecked(True)
+    
+    def switch_to_animation_preview_tab(self):
+        """切换到动画预览Tab (索引2)"""
+        self.page_stack.setCurrentIndex(2)
+        if self.tab_buttons and len(self.tab_buttons) > 2:
+            # 取消其他按钮选中
+            for btn in self.tab_buttons:
+                btn.setChecked(False)
+            # 选中第三个按钮
+            self.tab_buttons[2].setChecked(True)
     
     def closeEvent(self, event):
         """关闭事件"""
@@ -2665,6 +3050,7 @@ class MainWindow(QMainWindow):
             self._pose_worker.wait()
         
         # 释放资源
-        self.video_player.release()
+        if hasattr(self, 'video_player'):
+            self.video_player.release()
         
         event.accept()

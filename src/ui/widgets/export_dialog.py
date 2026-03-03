@@ -5,12 +5,13 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox,
     QPushButton, QFileDialog, QLineEdit, QRadioButton,
-    QButtonGroup, QTabWidget, QWidget, QMessageBox
+    QButtonGroup, QTabWidget, QWidget, QMessageBox, QSlider
 )
 from PySide6.QtCore import Qt
 
 from src.models.export_config import ExportConfig, ExportFormat, LayoutMode, ResampleFilter
 from src.utils.config import config
+from src.utils.pngquant import is_pngquant_available
 
 
 class ExportDialog(QDialog):
@@ -79,6 +80,79 @@ class ExportDialog(QDialog):
         dir_layout.addWidget(self.browse_btn)
         path_layout.addLayout(dir_layout)
         
+        # 格式选项组
+        format_group = QGroupBox("格式选项")
+        format_layout = QVBoxLayout(format_group)
+        
+        # 创建单选组
+        self.format_group = QButtonGroup(self)
+        
+        # 原始格式选项
+        self.original_radio = QRadioButton("原始格式")
+        self.original_radio.setChecked(True)
+        self.format_group.addButton(self.original_radio)
+        format_layout.addWidget(self.original_radio)
+        
+        # PNG压缩选项
+        png_layout = QHBoxLayout()
+        png_layout.addSpacing(20)
+        self.png_compress_radio = QRadioButton("PNG压缩 (pngquant)")
+        self.format_group.addButton(self.png_compress_radio)
+        png_layout.addWidget(self.png_compress_radio)
+        
+        png_layout.addWidget(QLabel("质量:"))
+        self.quality_slider = QSlider(Qt.Horizontal)
+        self.quality_slider.setRange(config.PNG_QUALITY_MIN, config.PNG_QUALITY_MAX)
+        self.quality_slider.setValue(config.PNG_QUALITY_DEFAULT)
+        self.quality_slider.setFixedWidth(100)
+        self.quality_slider.setEnabled(False)
+        self.quality_slider.valueChanged.connect(self._on_quality_changed)
+        png_layout.addWidget(self.quality_slider)
+        
+        self.quality_label = QLabel(str(config.PNG_QUALITY_DEFAULT))
+        self.quality_label.setFixedWidth(25)
+        self.quality_label.setEnabled(False)
+        png_layout.addWidget(self.quality_label)
+        
+        png_layout.addStretch()
+        format_layout.addLayout(png_layout)
+        
+        # WebP格式选项
+        webp_layout = QHBoxLayout()
+        webp_layout.addSpacing(20)
+        self.webp_radio = QRadioButton("WebP格式")
+        self.format_group.addButton(self.webp_radio)
+        webp_layout.addWidget(self.webp_radio)
+        
+        webp_layout.addWidget(QLabel("质量:"))
+        self.webp_quality_slider = QSlider(Qt.Horizontal)
+        self.webp_quality_slider.setRange(config.WEBP_QUALITY_MIN, config.WEBP_QUALITY_MAX)
+        self.webp_quality_slider.setValue(config.WEBP_QUALITY_DEFAULT)
+        self.webp_quality_slider.setFixedWidth(100)
+        self.webp_quality_slider.setEnabled(False)
+        self.webp_quality_slider.valueChanged.connect(self._on_webp_quality_changed)
+        webp_layout.addWidget(self.webp_quality_slider)
+        
+        self.webp_quality_label = QLabel(str(config.WEBP_QUALITY_DEFAULT))
+        self.webp_quality_label.setFixedWidth(25)
+        self.webp_quality_label.setEnabled(False)
+        webp_layout.addWidget(self.webp_quality_label)
+        
+        webp_layout.addStretch()
+        format_layout.addLayout(webp_layout)
+        
+        # 检查 pngquant 是否可用
+        if not is_pngquant_available():
+            self.png_compress_radio.setEnabled(False)
+            self.png_compress_radio.setToolTip("pngquant.exe 未找到")
+        
+        # 连接信号
+        self.original_radio.toggled.connect(self._on_format_changed)
+        self.png_compress_radio.toggled.connect(self._on_format_changed)
+        self.webp_radio.toggled.connect(self._on_format_changed)
+        
+        path_layout.addWidget(format_group)
+        
         layout.addWidget(path_group)
         
         # 信息标签
@@ -123,8 +197,8 @@ class ExportDialog(QDialog):
         cols_layout.addSpacing(20)
         cols_layout.addWidget(QLabel("列数:"))
         self.cols_spin = QSpinBox()
-        self.cols_spin.setRange(1, 100)
-        self.cols_spin.setValue(4)
+        self.cols_spin.setRange(1, config.SPRITE_COLS_MAX)
+        self.cols_spin.setValue(config.SPRITE_COLS_DEFAULT)
         cols_layout.addWidget(self.cols_spin)
         cols_layout.addStretch()
         layout_group_layout.addLayout(cols_layout)
@@ -151,16 +225,16 @@ class ExportDialog(QDialog):
         size_input_layout = QHBoxLayout()
         size_input_layout.addWidget(QLabel("宽:"))
         self.frame_width_spin = QSpinBox()
-        self.frame_width_spin.setRange(1, 4096)
-        self.frame_width_spin.setValue(128)
+        self.frame_width_spin.setRange(config.FRAME_SIZE_MIN, config.FRAME_SIZE_MAX)
+        self.frame_width_spin.setValue(config.FRAME_WIDTH_DEFAULT)
         self.frame_width_spin.setEnabled(False)
         self.frame_width_spin.valueChanged.connect(self._on_sprite_width_changed)
         size_input_layout.addWidget(self.frame_width_spin)
         
         size_input_layout.addWidget(QLabel("高:"))
         self.frame_height_spin = QSpinBox()
-        self.frame_height_spin.setRange(1, 4096)
-        self.frame_height_spin.setValue(128)
+        self.frame_height_spin.setRange(config.FRAME_SIZE_MIN, config.FRAME_SIZE_MAX)
+        self.frame_height_spin.setValue(config.FRAME_HEIGHT_DEFAULT)
         self.frame_height_spin.setEnabled(False)
         self.frame_height_spin.valueChanged.connect(self._on_sprite_height_changed)
         size_input_layout.addWidget(self.frame_height_spin)
@@ -193,8 +267,8 @@ class ExportDialog(QDialog):
         
         # 其他选项
         self.padding_spin = QSpinBox()
-        self.padding_spin.setRange(0, 100)
-        self.padding_spin.setValue(0)
+        self.padding_spin.setRange(0, config.PADDING_MAX)
+        self.padding_spin.setValue(config.PADDING_DEFAULT)
         
         padding_layout = QHBoxLayout()
         padding_layout.addWidget(QLabel("间距:"))
@@ -223,8 +297,8 @@ class ExportDialog(QDialog):
         fps_layout = QHBoxLayout()
         fps_layout.addWidget(QLabel("帧率:"))
         self.gif_fps_spin = QDoubleSpinBox()
-        self.gif_fps_spin.setRange(1, 60)
-        self.gif_fps_spin.setValue(10)
+        self.gif_fps_spin.setRange(1, config.GIF_FPS_MAX)
+        self.gif_fps_spin.setValue(config.GIF_FPS_DEFAULT)
         self.gif_fps_spin.setSuffix(" fps")
         fps_layout.addWidget(self.gif_fps_spin)
         fps_layout.addStretch()
@@ -233,8 +307,8 @@ class ExportDialog(QDialog):
         loop_layout = QHBoxLayout()
         loop_layout.addWidget(QLabel("循环次数:"))
         self.loop_spin = QSpinBox()
-        self.loop_spin.setRange(0, 100)
-        self.loop_spin.setValue(0)
+        self.loop_spin.setRange(0, config.GIF_LOOP_MAX)
+        self.loop_spin.setValue(config.GIF_LOOP_DEFAULT)
         self.loop_spin.setSpecialValueText("无限循环")
         loop_layout.addWidget(self.loop_spin)
         loop_layout.addStretch()
@@ -254,16 +328,16 @@ class ExportDialog(QDialog):
         gif_size_input_layout = QHBoxLayout()
         gif_size_input_layout.addWidget(QLabel("宽:"))
         self.gif_width_spin = QSpinBox()
-        self.gif_width_spin.setRange(1, 2048)
-        self.gif_width_spin.setValue(256)
+        self.gif_width_spin.setRange(config.FRAME_SIZE_MIN, config.GIF_SIZE_MAX)
+        self.gif_width_spin.setValue(config.GIF_WIDTH_DEFAULT)
         self.gif_width_spin.setEnabled(False)
         self.gif_width_spin.valueChanged.connect(self._on_gif_width_changed)
         gif_size_input_layout.addWidget(self.gif_width_spin)
         
         gif_size_input_layout.addWidget(QLabel("高:"))
         self.gif_height_spin = QSpinBox()
-        self.gif_height_spin.setRange(1, 2048)
-        self.gif_height_spin.setValue(256)
+        self.gif_height_spin.setRange(config.FRAME_SIZE_MIN, config.GIF_SIZE_MAX)
+        self.gif_height_spin.setValue(config.GIF_HEIGHT_DEFAULT)
         self.gif_height_spin.setEnabled(False)
         self.gif_height_spin.valueChanged.connect(self._on_gif_height_changed)
         gif_size_input_layout.addWidget(self.gif_height_spin)
@@ -319,16 +393,16 @@ class ExportDialog(QDialog):
         frames_size_input_layout = QHBoxLayout()
         frames_size_input_layout.addWidget(QLabel("宽:"))
         self.frames_width_spin = QSpinBox()
-        self.frames_width_spin.setRange(1, 4096)
-        self.frames_width_spin.setValue(128)
+        self.frames_width_spin.setRange(config.FRAME_SIZE_MIN, config.FRAME_SIZE_MAX)
+        self.frames_width_spin.setValue(config.FRAME_WIDTH_DEFAULT)
         self.frames_width_spin.setEnabled(False)
         self.frames_width_spin.valueChanged.connect(self._on_frames_width_changed)
         frames_size_input_layout.addWidget(self.frames_width_spin)
         
         frames_size_input_layout.addWidget(QLabel("高:"))
         self.frames_height_spin = QSpinBox()
-        self.frames_height_spin.setRange(1, 4096)
-        self.frames_height_spin.setValue(128)
+        self.frames_height_spin.setRange(config.FRAME_SIZE_MIN, config.FRAME_SIZE_MAX)
+        self.frames_height_spin.setValue(config.FRAME_HEIGHT_DEFAULT)
         self.frames_height_spin.setEnabled(False)
         self.frames_height_spin.valueChanged.connect(self._on_frames_height_changed)
         frames_size_input_layout.addWidget(self.frames_height_spin)
@@ -371,6 +445,8 @@ class ExportDialog(QDialog):
         layout.addStretch()
         return widget
     
+
+    
     def _create_godot_tab(self) -> QWidget:
         """创建Godot选项卡"""
         widget = QWidget()
@@ -392,8 +468,8 @@ class ExportDialog(QDialog):
         fps_layout = QHBoxLayout()
         fps_layout.addWidget(QLabel("帧率:"))
         self.godot_fps_spin = QDoubleSpinBox()
-        self.godot_fps_spin.setRange(1, 60)
-        self.godot_fps_spin.setValue(10)
+        self.godot_fps_spin.setRange(1, config.GIF_FPS_MAX)
+        self.godot_fps_spin.setValue(config.GIF_FPS_DEFAULT)
         self.godot_fps_spin.setSuffix(" fps")
         fps_layout.addWidget(self.godot_fps_spin)
         fps_layout.addStretch()
@@ -418,16 +494,16 @@ class ExportDialog(QDialog):
         godot_size_input_layout = QHBoxLayout()
         godot_size_input_layout.addWidget(QLabel("宽:"))
         self.godot_width_spin = QSpinBox()
-        self.godot_width_spin.setRange(1, 2048)
-        self.godot_width_spin.setValue(128)
+        self.godot_width_spin.setRange(config.FRAME_SIZE_MIN, config.GIF_SIZE_MAX)
+        self.godot_width_spin.setValue(config.FRAME_WIDTH_DEFAULT)
         self.godot_width_spin.setEnabled(False)
         self.godot_width_spin.valueChanged.connect(self._on_godot_width_changed)
         godot_size_input_layout.addWidget(self.godot_width_spin)
         
         godot_size_input_layout.addWidget(QLabel("高:"))
         self.godot_height_spin = QSpinBox()
-        self.godot_height_spin.setRange(1, 2048)
-        self.godot_height_spin.setValue(128)
+        self.godot_height_spin.setRange(config.FRAME_SIZE_MIN, config.GIF_SIZE_MAX)
+        self.godot_height_spin.setValue(config.FRAME_HEIGHT_DEFAULT)
         self.godot_height_spin.setEnabled(False)
         self.godot_height_spin.valueChanged.connect(self._on_godot_height_changed)
         godot_size_input_layout.addWidget(self.godot_height_spin)
@@ -566,6 +642,32 @@ class ExportDialog(QDialog):
             self.frames_width_spin.setValue(new_width)
             self._updating_size = False
     
+
+    
+    def _on_format_changed(self):
+        """格式选项变化"""
+        # 禁用所有滑块
+        self.quality_slider.setEnabled(False)
+        self.quality_label.setEnabled(False)
+        self.webp_quality_slider.setEnabled(False)
+        self.webp_quality_label.setEnabled(False)
+        
+        # 根据选中的格式启用相应的滑块
+        if self.png_compress_radio.isChecked():
+            self.quality_slider.setEnabled(True)
+            self.quality_label.setEnabled(True)
+        elif self.webp_radio.isChecked():
+            self.webp_quality_slider.setEnabled(True)
+            self.webp_quality_label.setEnabled(True)
+    
+    def _on_webp_quality_changed(self, value):
+        """WebP质量滑块变化"""
+        self.webp_quality_label.setText(str(value))
+    
+    def _on_quality_changed(self, value):
+        """质量滑块变化"""
+        self.quality_label.setText(str(value))
+    
     def _browse_path(self):
         # 从上次路径或当前路径开始
         start_dir = self.path_edit.text() or config.last_export_dir or ""
@@ -611,6 +713,17 @@ class ExportDialog(QDialog):
                     existing_files = [Path(f).name for f in existing_files[:3]]  # 只显示前3个文件
                     if len(existing_files) > 3:
                         existing_files.append("...")
+        elif self.tab_widget.currentIndex() == 3:  # WebP格式
+            # 检查输出目录是否存在
+            if output_path.exists():
+                # 检查是否有与输出名称相关的文件存在
+                import glob
+                existing_files = glob.glob(str(output_path / f"{output_name}_*.webp"))
+                if existing_files:
+                    file_exists = True
+                    existing_files = [Path(f).name for f in existing_files[:3]]  # 只显示前3个文件
+                    if len(existing_files) > 3:
+                        existing_files.append("...")
         
         # 如果文件已存在，询问是否覆盖
         if file_exists:
@@ -640,6 +753,7 @@ class ExportDialog(QDialog):
             self.gif_height_spin.setValue(height)
             self.frames_width_spin.setValue(width)
             self.frames_height_spin.setValue(height)
+            # WebP格式使用当前选项卡的尺寸设置，无需独立控件
             # Godot选项卡已隐藏，注释掉相关代码
             # self.godot_width_spin.setValue(width)
             # self.godot_height_spin.setValue(height)
@@ -648,15 +762,20 @@ class ExportDialog(QDialog):
         """获取导出配置"""
         config = ExportConfig()
         
-        # 格式
-        if self.tab_widget.currentIndex() == 0:
-            config.format = ExportFormat.SPRITE_SHEET
-        elif self.tab_widget.currentIndex() == 1:
-            config.format = ExportFormat.GIF
-        elif self.tab_widget.currentIndex() == 2:
-            config.format = ExportFormat.FRAMES
-        # elif self.tab_widget.currentIndex() == 3:
-        #     config.format = ExportFormat.GODOT
+        # 根据选项卡和格式选项组合确定最终导出格式
+        current_tab = self.tab_widget.currentIndex()
+        
+        if self.webp_radio.isChecked():
+            # WebP格式
+            config.format = ExportFormat.WEBP
+        else:
+            # 原始格式或其他格式
+            if current_tab == 0:
+                config.format = ExportFormat.SPRITE_SHEET
+            elif current_tab == 1:
+                config.format = ExportFormat.GIF
+            elif current_tab == 2:
+                config.format = ExportFormat.FRAMES
         
         # 输出路径
         config.output_name = self.name_edit.text() or "default"
@@ -699,5 +818,33 @@ class ExportDialog(QDialog):
         # if not self.godot_original_size_check.isChecked():
         #     config.godot_config.frame_width = self.godot_width_spin.value()
         #     config.godot_config.frame_height = self.godot_height_spin.value()
+        
+        # WebP配置
+        if config.format == ExportFormat.WEBP:
+            config.webp_config.quality = self.webp_quality_slider.value()
+            # 使用与当前选项卡相同的缩放算法
+            if self.tab_widget.currentIndex() == 0:
+                config.webp_config.resample_filter = ResampleFilter(self.resample_combo.currentData())
+            elif self.tab_widget.currentIndex() == 1:
+                config.webp_config.resample_filter = ResampleFilter(self.gif_resample_combo.currentData())
+            elif self.tab_widget.currentIndex() == 2:
+                config.webp_config.resample_filter = ResampleFilter(self.frames_resample_combo.currentData())
+            
+            # 使用与当前选项卡相同的尺寸设置
+            if self.tab_widget.currentIndex() == 0 and not self.original_size_check.isChecked():
+                config.webp_config.frame_width = self.frame_width_spin.value()
+                config.webp_config.frame_height = self.frame_height_spin.value()
+            elif self.tab_widget.currentIndex() == 1 and not self.gif_original_size_check.isChecked():
+                config.webp_config.frame_width = self.gif_width_spin.value()
+                config.webp_config.frame_height = self.gif_height_spin.value()
+            elif self.tab_widget.currentIndex() == 2 and not self.frames_original_size_check.isChecked():
+                config.webp_config.frame_width = self.frames_width_spin.value()
+                config.webp_config.frame_height = self.frames_height_spin.value()
+        
+        # PNG压缩配置
+        config.pngquant_config.enabled = self.png_compress_radio.isChecked()
+        quality = self.quality_slider.value()
+        config.pngquant_config.quality_min = max(quality - 20, 0)
+        config.pngquant_config.quality_max = quality
         
         return config

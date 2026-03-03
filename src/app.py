@@ -13,10 +13,13 @@ class GlobalWheelEventFilter(QObject):
             # 过滤常见的输入型控件，防止通过滚动滚轮改变数值
             if isinstance(obj, (QComboBox, QSlider, QSpinBox, QDoubleSpinBox)):
                 # 如果控件没有焦点，或者我们想彻底禁止滚动改变值
-                # 这里选择彻底禁止滚动改变值，因为用户明确要求“不要支持鼠标滚动”
+                # 这里选择彻底禁止滚动改变值，因为用户明确要求"不要支持鼠标滚动"
                 event.ignore()
                 return True
-        return super().eventFilter(obj, event)
+        # 只有当 obj 是 QObject 时才调用父类方法
+        if isinstance(obj, QObject):
+            return super().eventFilter(obj, event)
+        return False
 
 
 class App:
