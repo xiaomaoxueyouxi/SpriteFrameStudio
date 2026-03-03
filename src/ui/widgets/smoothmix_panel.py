@@ -455,7 +455,7 @@ class SmoothMixPanel(QWidget):
         start_bat = SMOOTHMIX_DIR / "start_comfyui.bat"
         
         if not start_bat.exists():
-            QMessageBox.warning(self, "错误", f"找不到启动脚本:\n{start_bat}")
+            QMessageBox.warning(self, "提示", "找不到ComfyUI启动脚本，请手动启动 start_comfyui.bat")
             return
         
         # 显示硬件信息
