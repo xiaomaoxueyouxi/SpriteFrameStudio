@@ -180,6 +180,11 @@ class MainWindow(QMainWindow):
         self.smoothmix_panel.video_generated.connect(self._on_i2v_video_generated)
         self.smoothmix_panel.status_changed.connect(self._on_i2v_status_changed)
         self.top_tab_widget.addTab(self.smoothmix_panel, "视频生成")
+
+        # Tab3: 作者信息
+        from src.ui.widgets.about_panel import AboutPanel
+        self.about_panel = AboutPanel()
+        self.top_tab_widget.addTab(self.about_panel, "关于")
         
         # ===== 左侧：垂直Tab栏 =====
         self.vertical_tab_bar = QWidget()
