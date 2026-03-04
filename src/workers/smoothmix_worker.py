@@ -309,6 +309,15 @@ class SmoothMixWorker(QThread):
         if not workflow:
             raise ValueError("无法加载工作流模板")
         
+        # Wan模型要求帧数必须是 4n+1 的形式（如 17, 25, 33, 41, 49...）
+        # 自动调整帧数到最近的合法值
+        frames = task.frames
+        remainder = (frames - 1) % 4
+        if remainder != 0:
+            # 向上调整到最近的 4n+1
+            frames = frames + (4 - remainder)
+            self._log(f"帧数已自动调整: {task.frames} -> {frames} (必须为4n+1)")
+        
         if task.workflow_type == WORKFLOW_GENERIC:
             # 通用版工作流节点映射
             workflow["52"]["inputs"]["image"] = start_image_name
@@ -321,7 +330,7 @@ class SmoothMixWorker(QThread):
             workflow["65"]["inputs"]["height"] = task.height
             workflow["83"]["inputs"]["width"] = task.width
             workflow["83"]["inputs"]["height"] = task.height
-            workflow["83"]["inputs"]["length"] = task.frames
+            workflow["83"]["inputs"]["length"] = frames
             workflow["101"]["inputs"]["steps"] = task.steps * 2  # 通用版步数是总步数
             workflow["102"]["inputs"]["steps"] = task.steps * 2
             workflow["101"]["inputs"]["end_at_step"] = task.steps
@@ -340,7 +349,7 @@ class SmoothMixWorker(QThread):
             workflow["240"]["inputs"]["text"] = task.negative_prompt
             workflow["252"]["inputs"]["value"] = task.width
             workflow["253"]["inputs"]["value"] = task.height
-            workflow["285"]["inputs"]["value"] = task.frames
+            workflow["285"]["inputs"]["value"] = frames
             workflow["254"]["inputs"]["value"] = task.steps
             workflow["229"]["inputs"]["seed"] = task.seed
             workflow["236"]["inputs"]["frame_rate"] = task.fps
@@ -353,6 +362,12 @@ class SmoothMixWorker(QThread):
     
     def queue_prompt(self, workflow: Dict) -> Optional[str]:
         try:
+            # 保存最终工作流到 last.json 便于调试
+            last_workflow_path = Path(__file__).parent.parent.parent / "workflows" / "last.json"
+            with open(last_workflow_path, 'w', encoding='utf-8') as f:
+                json.dump(workflow, f, ensure_ascii=False, indent=4)
+            self._log(f"已保存最终工作流到: {last_workflow_path}")
+            
             payload = {"prompt": workflow, "client_id": self.client_id}
             response = requests.post(f"{self.base_url}/prompt", json=payload, timeout=30)
             if response.status_code == 200:

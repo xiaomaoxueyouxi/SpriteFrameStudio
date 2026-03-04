@@ -1,0 +1,440 @@
+{
+    "221": {
+        "inputs": {
+            "blocks_to_swap": 40,
+            "offload_img_emb": false,
+            "offload_txt_emb": false,
+            "use_non_blocking": false,
+            "model": [
+                "232",
+                0
+            ]
+        },
+        "class_type": "wanBlockSwap",
+        "_meta": {
+            "title": "WanVideoBlockSwap"
+        }
+    },
+    "222": {
+        "inputs": {
+            "blocks_to_swap": 40,
+            "offload_img_emb": false,
+            "offload_txt_emb": false,
+            "use_non_blocking": false,
+            "model": [
+                "239",
+                0
+            ]
+        },
+        "class_type": "wanBlockSwap",
+        "_meta": {
+            "title": "WanVideoBlockSwap"
+        }
+    },
+    "226": {
+        "inputs": {
+            "vae_name": "Wan2.1_VAE.safetensors"
+        },
+        "class_type": "VAELoader",
+        "_meta": {
+            "title": "加载VAE"
+        }
+    },
+    "227": {
+        "inputs": {
+            "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+            "type": "wan",
+            "device": "default"
+        },
+        "class_type": "CLIPLoader",
+        "_meta": {
+            "title": "加载CLIP"
+        }
+    },
+    "229": {
+        "inputs": {
+            "boundary": 0.9,
+            "seed": 239841996,
+            "steps": [
+                "254",
+                0
+            ],
+            "cfg_high_noise": 1,
+            "cfg_low_noise": 1,
+            "sampler_name": "euler_ancestral",
+            "scheduler": "normal",
+            "sigma_shift": 8,
+            "denoise": 1,
+            "model_high_noise": [
+                "267",
+                0
+            ],
+            "model_low_noise": [
+                "268",
+                0
+            ],
+            "positive": [
+                "234",
+                0
+            ],
+            "negative": [
+                "234",
+                1
+            ],
+            "latent_image": [
+                "234",
+                2
+            ]
+        },
+        "class_type": "WanMoeKSampler",
+        "_meta": {
+            "title": "Wan MoE KSampler"
+        }
+    },
+    "230": {
+        "inputs": {
+            "samples": [
+                "229",
+                0
+            ],
+            "vae": [
+                "226",
+                0
+            ]
+        },
+        "class_type": "VAEDecode",
+        "_meta": {
+            "title": "VAE解码"
+        }
+    },
+    "232": {
+        "inputs": {
+            "unet_name": "smoothMixWan22I2V14B_i2vLow.safetensors",
+            "weight_dtype": "default"
+        },
+        "class_type": "UNETLoader",
+        "_meta": {
+            "title": "UNet加载器"
+        }
+    },
+    "234": {
+        "inputs": {
+            "width": [
+                "252",
+                0
+            ],
+            "height": [
+                "253",
+                0
+            ],
+            "length": [
+                "285",
+                0
+            ],
+            "batch_size": 1,
+            "positive": [
+                "241",
+                0
+            ],
+            "negative": [
+                "240",
+                0
+            ],
+            "vae": [
+                "226",
+                0
+            ],
+            "clip_vision_start_image": [
+                "243",
+                0
+            ],
+            "clip_vision_end_image": [
+                "248",
+                0
+            ],
+            "start_image": [
+                "246",
+                0
+            ],
+            "end_image": [
+                "245",
+                0
+            ]
+        },
+        "class_type": "WanFirstLastFrameToVideo",
+        "_meta": {
+            "title": "WanFirstLastFrameToVideo"
+        }
+    },
+    "236": {
+        "inputs": {
+            "frame_rate": 16,
+            "loop_count": 0,
+            "filename_prefix": "wan2.2_",
+            "format": "video/h264-mp4",
+            "pix_fmt": "yuv420p",
+            "crf": 19,
+            "save_metadata": true,
+            "trim_to_audio": false,
+            "pingpong": false,
+            "save_output": true,
+            "images": [
+                "263",
+                0
+            ]
+        },
+        "class_type": "VHS_VideoCombine",
+        "_meta": {
+            "title": "Video Combine 🎥🅥🅗🅢"
+        }
+    },
+    "237": {
+        "inputs": {
+            "image": "走路1.png"
+        },
+        "class_type": "LoadImage",
+        "_meta": {
+            "title": "加载图像"
+        }
+    },
+    "238": {
+        "inputs": {
+            "image": "走路1.png"
+        },
+        "class_type": "LoadImage",
+        "_meta": {
+            "title": "加载图像"
+        }
+    },
+    "239": {
+        "inputs": {
+            "unet_name": "smoothMixWan22I2V14B_i2vHigh.safetensors",
+            "weight_dtype": "default"
+        },
+        "class_type": "UNETLoader",
+        "_meta": {
+            "title": "UNet加载器"
+        }
+    },
+    "240": {
+        "inputs": {
+            "text": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走, censored, mosaic censoring, bar censor, pixelated, glowing, bloom, blurry, day, out of focus, low detail, bad anatomy, ugly, overexposed, underexposed, distorted face, extra limbs, cartoonish, 3d render artifacts, duplicate people, unnatural lighting, bad composition, missing shadows, low resolution, poorly textured, glitch, noise, grain, static, motionless, still frame, overall grayish, worst quality, low quality, JPEG compression artifacts, subtitles, stylized, artwork, painting, illustration, cluttered background, many people in background, three legs, walking backward, zoom out, zoom in, mouth speaking, moving mouth, talking, speaking, mute speaking, unnatural skin tone, discolored eyelid, red eyelids, red upper eyelids, no red eyeshadow, closed eyes, no wide-open innocent eyes, poorly drawn hands, extra fingers, fused fingers, poorly drawn face, deformed, disfigured, malformed limbs, thighs, fog, mist, voluminous eyelashes, blush,",
+            "clip": [
+                "227",
+                0
+            ]
+        },
+        "class_type": "CLIPTextEncode",
+        "_meta": {
+            "title": "CLIP文本编码"
+        }
+    },
+    "241": {
+        "inputs": {
+            "text": "镜头跟随，缓慢走路，头不动",
+            "clip": [
+                "227",
+                0
+            ]
+        },
+        "class_type": "CLIPTextEncode",
+        "_meta": {
+            "title": "CLIP文本编码"
+        }
+    },
+    "243": {
+        "inputs": {
+            "crop": "none",
+            "clip_vision": [
+                "244",
+                0
+            ],
+            "image": [
+                "246",
+                0
+            ]
+        },
+        "class_type": "CLIPVisionEncode",
+        "_meta": {
+            "title": "CLIP视觉编码"
+        }
+    },
+    "244": {
+        "inputs": {
+            "clip_name": "clip_vision_h.safetensors"
+        },
+        "class_type": "CLIPVisionLoader",
+        "_meta": {
+            "title": "加载CLIP视觉"
+        }
+    },
+    "245": {
+        "inputs": {
+            "width": [
+                "252",
+                0
+            ],
+            "height": [
+                "253",
+                0
+            ],
+            "upscale_method": "lanczos",
+            "keep_proportion": "resize",
+            "pad_color": "0, 0, 0",
+            "crop_position": "center",
+            "divisible_by": 16,
+            "device": "cpu",
+            "image": [
+                "238",
+                0
+            ]
+        },
+        "class_type": "ImageResizeKJv2",
+        "_meta": {
+            "title": "Resize Image v2"
+        }
+    },
+    "246": {
+        "inputs": {
+            "width": [
+                "252",
+                0
+            ],
+            "height": [
+                "253",
+                0
+            ],
+            "upscale_method": "lanczos",
+            "keep_proportion": "resize",
+            "pad_color": "0, 0, 0",
+            "crop_position": "center",
+            "divisible_by": 16,
+            "device": "cpu",
+            "image": [
+                "237",
+                0
+            ]
+        },
+        "class_type": "ImageResizeKJv2",
+        "_meta": {
+            "title": "Resize Image v2"
+        }
+    },
+    "248": {
+        "inputs": {
+            "crop": "none",
+            "clip_vision": [
+                "244",
+                0
+            ],
+            "image": [
+                "245",
+                0
+            ]
+        },
+        "class_type": "CLIPVisionEncode",
+        "_meta": {
+            "title": "CLIP视觉编码"
+        }
+    },
+    "252": {
+        "inputs": {
+            "value": 368
+        },
+        "class_type": "Int",
+        "_meta": {
+            "title": "Int"
+        }
+    },
+    "253": {
+        "inputs": {
+            "value": 368
+        },
+        "class_type": "Int",
+        "_meta": {
+            "title": "Int"
+        }
+    },
+    "254": {
+        "inputs": {
+            "value": 4
+        },
+        "class_type": "INTConstant",
+        "_meta": {
+            "title": "INT Constant"
+        }
+    },
+    "263": {
+        "inputs": {
+            "anything": [
+                "230",
+                0
+            ]
+        },
+        "class_type": "easy cleanGpuUsed",
+        "_meta": {
+            "title": "清理显存占用"
+        }
+    },
+    "265": {
+        "inputs": {
+            "sage_attention": "disabled",
+            "model": [
+                "222",
+                0
+            ]
+        },
+        "class_type": "PathchSageAttentionKJ",
+        "_meta": {
+            "title": "高噪声-Patch Sage Attention KJ"
+        }
+    },
+    "266": {
+        "inputs": {
+            "sage_attention": "disabled",
+            "model": [
+                "221",
+                0
+            ]
+        },
+        "class_type": "PathchSageAttentionKJ",
+        "_meta": {
+            "title": "低噪声-Patch Sage Attention KJ"
+        }
+    },
+    "267": {
+        "inputs": {
+            "enable_fp16_accumulation": false,
+            "model": [
+                "265",
+                0
+            ]
+        },
+        "class_type": "ModelPatchTorchSettings",
+        "_meta": {
+            "title": "Model Patch Torch Settings"
+        }
+    },
+    "268": {
+        "inputs": {
+            "enable_fp16_accumulation": false,
+            "model": [
+                "266",
+                0
+            ]
+        },
+        "class_type": "ModelPatchTorchSettings",
+        "_meta": {
+            "title": "Model Patch Torch Settings"
+        }
+    },
+    "285": {
+        "inputs": {
+            "value": 36
+        },
+        "class_type": "Int",
+        "_meta": {
+            "title": "Int"
+        }
+    }
+}
