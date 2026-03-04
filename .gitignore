@@ -99,6 +99,12 @@ desktop.ini
 config.json
 user_config.json
 
+# Python Environment
+python_env/
+
+# Wan2.2 AI Video Generation
+Wan2.2-SmoothMix/
+
 # Conda
 *.conda
 *.tar.bz2
