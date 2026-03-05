@@ -306,13 +306,37 @@ class BiRefNetSession:
         return [mask]
 
 
+def _ensure_cuda_dll_paths():
+    """确保 CUDA DLL 搜索路径正确（Windows 便携环境兼容）"""
+    import sys
+    import os
+    if sys.platform != 'win32':
+        return
+    # 便携 Python 环境下，CUDA 运行库在 Library\bin 中
+    lib_bin = os.path.join(sys.exec_prefix, "Library", "bin")
+    if os.path.exists(lib_bin):
+        try:
+            os.add_dll_directory(lib_bin)
+        except OSError:
+            pass
+
+
 class BiRefNetTorchSession:
     """BiRefNet PyTorch 会话，用于 ToonOut 等需要 DeformConv 的模型"""
     
     def __init__(self, model_path: str, model_name: str = "birefnet-toonout",
                  force_cpu: bool = False,
                  progress_callback: Optional[Callable[[str], None]] = None):
-        import torch
+        _ensure_cuda_dll_paths()
+        try:
+            import torch
+        except OSError as e:
+            raise OSError(
+                f"PyTorch 加载失败，可能是 CUDA/cuDNN 版本不兼容: {e}\n"
+                f"建议: 1) 检查 python_env\\Library\\bin 下是否有完整的 CUDA 运行时\n"
+                f"      2) 删除 torch\\lib 下重复的 cudnn*.dll 以避免版本冲突\n"
+                f"      3) 或使用 CPU-only 版本的 PyTorch"
+            ) from e
         import sys
         
         self.model_name = model_name

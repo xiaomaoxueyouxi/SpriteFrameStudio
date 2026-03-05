@@ -54,7 +54,7 @@
     "229": {
         "inputs": {
             "boundary": 0.9,
-            "seed": 1309841699,
+            "seed": 1377390665,
             "steps": [
                 "254",
                 0
@@ -168,7 +168,7 @@
     },
     "236": {
         "inputs": {
-            "frame_rate": 8,
+            "frame_rate": 16,
             "loop_count": 0,
             "filename_prefix": "wan2.2_",
             "format": "video/h264-mp4",
@@ -231,7 +231,7 @@
     },
     "241": {
         "inputs": {
-            "text": "镜头跟随，缓慢走路，精准循环，头不动，不停顿",
+            "text": "镜头跟随，匀速走路，头部不动，身体稳定",
             "clip": [
                 "227",
                 0
@@ -430,7 +430,7 @@
     },
     "285": {
         "inputs": {
-            "value": 33
+            "value": 40
         },
         "class_type": "Int",
         "_meta": {
