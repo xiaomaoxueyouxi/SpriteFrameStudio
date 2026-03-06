@@ -54,7 +54,7 @@
     "229": {
         "inputs": {
             "boundary": 0.9,
-            "seed": 1377390665,
+            "seed": 441806835,
             "steps": [
                 "254",
                 0
@@ -190,7 +190,7 @@
     },
     "237": {
         "inputs": {
-            "image": "走路1.png"
+            "image": "站立.png"
         },
         "class_type": "LoadImage",
         "_meta": {
@@ -199,7 +199,7 @@
     },
     "238": {
         "inputs": {
-            "image": "走路1.png"
+            "image": "站立.png"
         },
         "class_type": "LoadImage",
         "_meta": {
@@ -231,7 +231,7 @@
     },
     "241": {
         "inputs": {
-            "text": "镜头跟随，匀速走路，头部不动，身体稳定",
+            "text": "镜头跟随人物，人物原地快速旋转一圈，动作简单自然，姿态优雅，无多余动作，最后面向左侧",
             "clip": [
                 "227",
                 0
@@ -430,7 +430,7 @@
     },
     "285": {
         "inputs": {
-            "value": 40
+            "value": 60
         },
         "class_type": "Int",
         "_meta": {

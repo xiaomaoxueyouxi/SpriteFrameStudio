@@ -36,6 +36,7 @@ from src.workers.pose_worker import PoseWorker
 
 from src.models.frame_data import VideoInfo
 from src.utils.config import config
+from src.utils.crossfade import apply_transition_to_frame_data
 
 
 class VerticalTabButton(QPushButton):
@@ -1402,26 +1403,31 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "没有可导出的帧")
             return
         
+        # 获取要导出的帧
+        frames = []
+        for idx in selected_indices:
+            frame = self._frame_manager.get_frame(idx)
+            if frame:
+                frames.append(frame)
+        
+        # 查询循环过渡设置，非破坏性地应用到导出帧
+        cf_enabled, cf_count, cf_mode = self.animation_preview.get_crossfade_settings()
+        if cf_enabled and len(frames) > 1:
+            frames = apply_transition_to_frame_data(frames, cf_count, cf_mode)
+        
         # 打开导出对话框
-        dialog = ExportDialog(frame_count=len(selected_indices), parent=self)
+        dialog = ExportDialog(frame_count=len(frames), parent=self)
         
         # 设置当前帧尺寸（用于宽高比计算和默认值）
-        if selected_indices:
-            first_frame = self._frame_manager.get_frame(selected_indices[0])
+        if frames:
+            first_frame = frames[0]
             if first_frame and first_frame.display_image is not None:
                 h, w = first_frame.display_image.shape[:2]
                 dialog.set_original_size(w, h)
         
         if dialog.exec() == ExportDialog.Accepted:
             export_config = dialog.get_config()
-            export_config.frame_indices = selected_indices
-            
-            # 获取要导出的帧
-            frames = []
-            for idx in selected_indices:
-                frame = self._frame_manager.get_frame(idx)
-                if frame:
-                    frames.append(frame)
+            export_config.frame_indices = list(range(len(frames)))
             
             try:
                 self.status_label.setText("正在导出...")

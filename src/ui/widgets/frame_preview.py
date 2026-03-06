@@ -1789,15 +1789,29 @@ class FramePreview(QWidget):
         toolbar.addSpacing(10)
         toolbar.addWidget(QLabel("间隔:"))
         self.interval_spin = QSpinBox()
-        self.interval_spin.setRange(2, config.FRAME_INTERVAL_MAX)
+        self.interval_spin.setRange(1, config.FRAME_INTERVAL_MAX)
         self.interval_spin.setValue(config.FRAME_INTERVAL_DEFAULT)
-        self.interval_spin.setFixedWidth(50)
-        self.interval_spin.setStyleSheet("background-color: #3d3d3d; border: 1px solid #4d4d4d; border-radius: 4px; padding: 2px; color: #eee;")
+        self.interval_spin.setFixedWidth(60)
+        self.interval_spin.setMinimumHeight(28)
+        self.interval_spin.setStyleSheet("""
+            QSpinBox {
+                background-color: #3d3d3d;
+                border: 1px solid #4d4d4d;
+                border-radius: 4px;
+                padding: 2px 4px;
+                padding-right: 20px;
+                color: #eee;
+            }
+            QSpinBox::up-button, QSpinBox::down-button {
+                width: 18px;
+                height: 12px;
+            }
+        """)
         toolbar.addWidget(self.interval_spin)
         
         self.interval_select_btn = QPushButton("⏹ 间隔选帧")
         self.interval_select_btn.setStyleSheet(btn_style)
-        self.interval_select_btn.setToolTip("在当前勾选范围内按间隔重新选帧，强制保留首尾帧")
+        self.interval_select_btn.setToolTip("在当前选中范围内按间隔抽帧：间隔N=每隔N帧取1帧，首尾帧强制保留")
         self.interval_select_btn.clicked.connect(self._on_interval_select_clicked)
         toolbar.addWidget(self.interval_select_btn)
         
@@ -1909,39 +1923,37 @@ class FramePreview(QWidget):
         return [thumb.frame_index for thumb in self._thumbnails if thumb._is_selected]
     
     def _on_interval_select_clicked(self):
-        """处理间隔选帧逻辑：仅作用于当前已选中的帧范围"""
+        """间隔选帧：在首尾选中帧范围内，每隔 N 帧取 1 帧，首尾帧强制保留"""
         selected_indices = self.get_selected_indices()
         if not selected_indices:
             return
-            
-        interval = self.interval_spin.value()
-        if interval <= 1:
-            return
-            
+
+        interval = self.interval_spin.value()  # 间隔N = 跳过N帧，步长 = N+1
+        step = interval + 1
         first_idx = selected_indices[0]
         last_idx = selected_indices[-1]
-        
-        # 在已选中集合中进行筛选
-        selected_set = set(selected_indices)
-        new_selection = set()
-        
-        # 从第一个选中的帧开始，按间隔跳跃
-        for i in range(first_idx, last_idx + 1, interval):
-            if i in selected_set:
-                new_selection.add(i)
-        
-        # 确保包含最后一个原本选中的帧
-        new_selection.add(last_idx)
-        
-        # 批量更新 UI
+
+        # 收集范围内所有帧的 frame_index（按顺序）
+        range_thumbs = sorted(
+            [t for t in self._thumbnails if first_idx <= t.frame_index <= last_idx],
+            key=lambda t: t.frame_index
+        )
+        if not range_thumbs:
+            return
+
+        # 按步长取帧索引，强制加入首尾
+        all_range_indices = [t.frame_index for t in range_thumbs]
+        new_selection = set(all_range_indices[i] for i in range(0, len(all_range_indices), step))
+        new_selection.add(all_range_indices[0])   # 强制保留首帧
+        new_selection.add(all_range_indices[-1])  # 强制保留尾帧
+
+        # 批量更新 UI：范围内按新集合选中/取消，范围外不变
         self.begin_batch_update()
-        # 遍历所有缩略图，如果在原本选中的范围内，则根据新集合决定是否选中
-        for thumb in self._thumbnails:
-            if thumb.frame_index in selected_set:
-                thumb.set_selected(thumb.frame_index in new_selection)
+        for thumb in range_thumbs:
+            thumb.set_selected(thumb.frame_index in new_selection)
         self.end_batch_update()
-        
-        msg = f"间隔选帧完成：从 {len(selected_indices)} 帧中保留了 {len(new_selection)} 帧"
+
+        msg = f"间隔选帧完成：范围 {len(all_range_indices)} 帧 → 保留 {len(new_selection)} 帧（间隔{interval}帧）"
         self.status_message.emit(msg)
 
     def _on_thumbnail_clicked(self, frame_index: int, shift_pressed: bool = False):
