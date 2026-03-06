@@ -1608,6 +1608,7 @@ class FrameThumbnail(QFrame):
         self._is_selected = False
         self._image: Optional[np.ndarray] = None
         self._display_pixmap: Optional[QPixmap] = None  # 缓存显示用的 pixmap
+        self._tag: Optional[str] = None  # 帧标签
         
         self.setup_ui()
     
@@ -1623,11 +1624,27 @@ class FrameThumbnail(QFrame):
         self.image_label.setStyleSheet("background-color: #1e1e1e; border: 1px solid #3d3d3d; border-radius: 4px;")
         layout.addWidget(self.image_label)
         
-        # 帧序号
+        # 帧序号 + 标签行
+        info_layout = QHBoxLayout()
+        info_layout.setContentsMargins(0, 0, 0, 0)
+        info_layout.setSpacing(2)
+        
         self.index_label = QLabel(f"#{self.frame_index}")
         self.index_label.setAlignment(Qt.AlignCenter)
         self.index_label.setStyleSheet("color: #888; font-size: 10px;")
-        layout.addWidget(self.index_label)
+        info_layout.addWidget(self.index_label)
+        
+        # 标签显示
+        self.tag_label = QLabel()
+        self.tag_label.setAlignment(Qt.AlignCenter)
+        self.tag_label.setStyleSheet(
+            "color: #fff; background-color: #e67e22; font-size: 9px; "
+            "font-weight: bold; border-radius: 3px; padding: 1px 4px;"
+        )
+        self.tag_label.setVisible(False)
+        info_layout.addWidget(self.tag_label)
+        
+        layout.addLayout(info_layout)
         
         # 选中复选框
         self.checkbox = QCheckBox()
@@ -1644,6 +1661,15 @@ class FrameThumbnail(QFrame):
         """设置图像"""
         self._image = image
         self._update_pixmap()
+    
+    def set_tag(self, tag: Optional[str]):
+        """设置帧标签"""
+        self._tag = tag
+        if tag:
+            self.tag_label.setText(tag)
+            self.tag_label.setVisible(True)
+        else:
+            self.tag_label.setVisible(False)
     
     def _update_pixmap(self):
         """更新 pixmap，缓存合成结果"""
@@ -1809,7 +1835,7 @@ class FramePreview(QWidget):
         """)
         toolbar.addWidget(self.interval_spin)
         
-        self.interval_select_btn = QPushButton("⏹ 间隔选帧")
+        self.interval_select_btn = QPushButton("间隔选帧")
         self.interval_select_btn.setStyleSheet(btn_style)
         self.interval_select_btn.setToolTip("在当前选中范围内按间隔抽帧：间隔N=每隔N帧取1帧，首尾帧强制保留")
         self.interval_select_btn.clicked.connect(self._on_interval_select_clicked)
@@ -1864,6 +1890,10 @@ class FramePreview(QWidget):
             # 设置图像
             if frame.display_image is not None:
                 thumb.set_image(frame.display_image)
+            
+            # 设置标签
+            if hasattr(frame, 'tag') and frame.tag:
+                thumb.set_tag(frame.tag)
             
             # 设置选中状态
             thumb.set_selected(frame.is_selected)

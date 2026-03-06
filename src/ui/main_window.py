@@ -34,7 +34,7 @@ from src.workers.extraction_worker import ExtractionWorker
 from src.workers.background_worker import BackgroundWorker
 from src.workers.pose_worker import PoseWorker
 
-from src.models.frame_data import VideoInfo
+from src.models.frame_data import VideoInfo, FrameData
 from src.utils.config import config
 from src.utils.crossfade import apply_transition_to_frame_data
 
@@ -1085,6 +1085,9 @@ class MainWindow(QMainWindow):
         self.frame_preview.status_message.connect(self.status_label.setText)
         self.frame_preview.export_single_frame.connect(self.export_single_frame)
         self.frame_preview.image_edited.connect(self._on_frame_image_edited)
+        
+        # 补帧完成信号
+        self.animation_preview.rife_completed.connect(self._on_rife_frames_ready)
         
         # Tab切换
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
@@ -2750,6 +2753,47 @@ class MainWindow(QMainWindow):
         count = self._frame_manager.frame_count
         selected = self._frame_manager.selected_count
         self.frame_count_label.setText(f"帧数: {count} (选中: {selected})")
+    
+    def _on_rife_frames_ready(self, rife_images: list):
+        """补帧完成，将补帧追加到帧管理"""
+        if not rife_images:
+            return
+        
+        # 计算新帧的起始索引和时间戳
+        current_count = self._frame_manager.frame_count
+        
+        # 获取最后一帧的时间戳作为基准
+        last_frame = self._frame_manager.get_frame(current_count - 1) if current_count > 0 else None
+        base_timestamp = last_frame.timestamp if last_frame else 0.0
+        
+        # 创建 FrameData 对象，标记为 "补"
+        new_frames = []
+        for i, img in enumerate(rife_images):
+            frame = FrameData(
+                index=current_count + i,
+                timestamp=base_timestamp + (i + 1) * 0.001,  # 微小递增时间戳
+                image=img,
+                is_selected=True,
+                tag="补",
+            )
+            new_frames.append(frame)
+        
+        # 追加到帧管理器
+        self._frame_manager.add_frames(new_frames)
+        
+        # 刷新帧预览网格
+        self.frame_preview.set_frames(self._frame_manager.frames)
+        
+        # 更新帧计数
+        self._update_frame_count()
+        
+        # 更新动画预览
+        self._update_animation_preview()
+        
+        self.status_label.setText(
+            f"已将 {len(rife_images)} 帧补帧添加到帧管理（标签：补），总帧数: {self._frame_manager.frame_count}"
+        )
+        print(f"[RIFE] 已追加 {len(rife_images)} 帧到帧管理器，总帧数: {self._frame_manager.frame_count}")
     
     def _find_most_similar_frames(self):
         """查找所有帧的最相似帧，要求相隔X帧以上"""

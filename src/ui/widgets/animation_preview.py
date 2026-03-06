@@ -18,7 +18,7 @@ class AnimationPreview(QWidget):
     """动画预览控件 - 使用透明叠加方案，无需实时合成"""
     
     # 信号：补帧完成
-    rife_completed = Signal(int)  # 参数：生成的帧数
+    rife_completed = Signal(list)  # 参数：List[np.ndarray] 生成的补帧图像列表
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -164,7 +164,7 @@ class AnimationPreview(QWidget):
         rife_vlayout.setSpacing(4)
         
         # 红字警告提示
-        warning_label = QLabel("⚠️ 补帧部分不可操作，请处理完所有帧，最后补帧！然后再导出")
+        warning_label = QLabel("⚠️ 请在抠图前补帧！！透明图补帧效果不好")
         warning_label.setStyleSheet("color: #ff4444; font-weight: bold; font-size: 12px;")
         warning_label.setWordWrap(True)
         rife_vlayout.addWidget(warning_label)
@@ -567,19 +567,19 @@ class AnimationPreview(QWidget):
         # 刷新预览
         self._apply_crossfade()
         
-        # 发送信号
-        self.rife_completed.emit(len(frames))
+        # 发送信号（传递补帧图像列表）
+        self.rife_completed.emit(frames)
         
         # 显示提示
         if self._append_rife_to_preview:
             QMessageBox.information(
                 self, "补帧完成", 
-                f"已生成 {len(frames)} 帧中间帧\n已追加到预览序列末尾"
+                f"已生成 {len(frames)} 帧中间帧\n已追加到预览序列末尾，同时已添加到帧管理（标签：补）"
             )
         else:
             QMessageBox.information(
                 self, "补帧完成", 
-                f"已生成 {len(frames)} 帧中间帧\n帧文件保存在: {self._rife_output_dir}"
+                f"已生成 {len(frames)} 帧中间帧\n帧文件保存在: {self._rife_output_dir}\n已添加到帧管理（标签：补）"
             )
     
     def _on_rife_error(self, error_msg: str):

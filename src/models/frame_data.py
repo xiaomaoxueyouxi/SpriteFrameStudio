@@ -44,6 +44,9 @@ class FrameData(BaseModel):
     # 分区域特征数据引用ID
     regional_feature_id: Optional[str] = Field(default=None, description="关联的分区域特征数据ID")
     
+    # 标签（用于区分补帧等特殊帧）
+    tag: Optional[str] = Field(default=None, description="帧标签，如'补'表示补帧生成")
+    
     @property
     def has_image(self) -> bool:
         """是否有图像数据"""
