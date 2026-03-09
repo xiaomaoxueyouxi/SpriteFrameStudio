@@ -115,5 +115,8 @@ spriteframe.zip
 portable_output/
 .trae/
 
+# Update folder
+update/sync_files/
+
 # Windows device files
 nul

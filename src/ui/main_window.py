@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QTabWidget, QProgressBar, QStatusBar, QFileDialog,
     QMessageBox, QComboBox, QCheckBox, QToolBar, QApplication,
     QScrollArea, QFrame, QGridLayout, QColorDialog, QSpinBox,
-    QStackedWidget, QSizePolicy
+    QStackedWidget, QSizePolicy, QAbstractSpinBox
 )
 from PySide6.QtCore import Qt, Slot, Signal, QTimer
 from PySide6.QtGui import QAction, QColor, QPainter, QFont
@@ -371,6 +371,9 @@ class MainWindow(QMainWindow):
         self.fps_spin.setRange(config.EXTRACT_FPS_MIN, config.EXTRACT_FPS_MAX)
         self.fps_spin.setValue(config.extract_fps)
         self.fps_spin.setSuffix(" fps")
+        # 抽帧帧率固定为视频原始帧率，禁止用户修改
+        self.fps_spin.setReadOnly(True)
+        self.fps_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         fps_row.addWidget(self.fps_spin)
         fps_layout.addLayout(fps_row)
         
