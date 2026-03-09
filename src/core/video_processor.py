@@ -9,6 +9,67 @@ import time
 from src.models.frame_data import VideoInfo
 
 
+def _detect_alpha_via_ffmpeg(video_path: str) -> bool:
+    """使用 ffmpeg 检测视频像素格式是否含 Alpha 通道"""
+    try:
+        import subprocess as sp
+        import re
+        from moviepy.config import FFMPEG_BINARY
+        from moviepy.tools import cross_platform_popen_params, ffmpeg_escape_filename
+        cmd = [FFMPEG_BINARY, "-hide_banner", "-i", ffmpeg_escape_filename(video_path)]
+        popen_params = cross_platform_popen_params(
+            {"bufsize": 10**5, "stdout": sp.PIPE, "stderr": sp.PIPE, "stdin": sp.DEVNULL}
+        )
+        proc = sp.Popen(cmd, **popen_params)
+        _, error = proc.communicate()
+        proc.terminate()
+        raw = error.decode("utf8", errors="ignore")
+
+        # 识别常见含 Alpha 的像素格式
+        alpha_formats = {
+            "rgba", "bgra", "argb", "abgr",
+            "yuva420p", "yuva422p", "yuva444p",
+            "ya8", "ya16le", "ya16be",
+            "rgba64le", "rgba64be", "bgra64le", "bgra64be",
+            "ayuv64le", "ayuv64be",
+        }
+
+        # 找到 Video 行并打印，便于调试
+        video_line = ""
+        for line in raw.splitlines():
+            if "Video:" in line:
+                video_line = line.strip()
+                print(f"[alpha detect] ffmpeg Video line: {video_line}")
+                break
+
+        if not video_line:
+            print("[alpha detect] 未找到 Video 行")
+            return False
+
+        # ffmpeg Video 行格式：
+        #   Stream #0:0: Video: qtrle (RLE / Apple QuickTime Animation), rgba, 512x512 ...
+        #   Stream #0:0: Video: h264 (Baseline), yuv420p, 1920x1080 ...
+        # codec 名后可能有括号注释 "(...)"
+        # 策略1：精确正则，跳过可选括号注释后提取 pix_fmt
+        m = re.search(r"Video:\s+\S+(?:\s+\([^)]*\))?,\s+(\S+)", video_line)
+        if m:
+            pix_fmt = m.group(1).rstrip(",")
+            print(f"[alpha detect] 检测到像素格式: {pix_fmt}")
+            if pix_fmt in alpha_formats or pix_fmt.endswith("a"):
+                return True
+
+        # 策略2：直接在 Video 行中搜索已知 alpha 格式词（兜底）
+        for fmt in alpha_formats:
+            if re.search(r"\b" + re.escape(fmt) + r"\b", video_line):
+                print(f"[alpha detect] 兜底策略匹配到: {fmt}")
+                return True
+
+        return False
+    except Exception as e:
+        print(f"[alpha detect] ffmpeg 检测失败，回退到非 alpha 模式: {e}")
+        return False
+
+
 class VideoProcessor:
     """视频处理器 - 负责视频加载和元数据提取"""
     
@@ -27,6 +88,8 @@ class VideoProcessor:
         self._preload_batch_size = 30  # 每次预加载30帧
         self._max_preload_batch_size = 50  # 最大预加载批次大小
         self._min_preload_batch_size = 10  # 最小预加载批次大小
+        # moviepy FFMPEG_VideoReader，仅在 has_alpha 视频时使用
+        self._ffmpeg_reader = None
     
     @property
     def is_loaded(self) -> bool:
@@ -63,6 +126,9 @@ class VideoProcessor:
         # 计算时长
         duration = frame_count / fps if fps > 0 else 0
         
+        # 检测是否含 alpha 通道：改用 ffmpeg 解析获取像素格式，并清除旧的 OpenCV 点位错误方法
+        has_alpha = _detect_alpha_via_ffmpeg(str(video_path))
+        
         self._video_info = VideoInfo(
             path=video_path,
             width=width,
@@ -70,7 +136,8 @@ class VideoProcessor:
             fps=fps,
             frame_count=frame_count,
             duration=duration,
-            codec=codec
+            codec=codec,
+            has_alpha=has_alpha
         )
         
         # 检测是否需要使用顺序模式
@@ -79,8 +146,46 @@ class VideoProcessor:
         # 动态调整缓存大小和预加载批次大小
         self._adjust_cache_settings()
         
+        # 若视频含 Alpha，初始化 moviepy FFMPEG_VideoReader（用于预览播放读帧）
+        if has_alpha:
+            self._init_ffmpeg_reader(str(video_path))
+        
         return self._video_info
     
+    def _init_ffmpeg_reader(self, video_path: str):
+        """初始化 moviepy FFMPEG_VideoReader，用于读取 Alpha 视频帧"""
+        try:
+            if self._ffmpeg_reader is not None:
+                try:
+                    self._ffmpeg_reader.close()
+                except Exception:
+                    pass
+                self._ffmpeg_reader = None
+            from moviepy.video.io.ffmpeg_reader import FFMPEG_VideoReader
+            self._ffmpeg_reader = FFMPEG_VideoReader(
+                video_path,
+                pixel_format="rgba",
+                print_infos=False,
+            )
+        except Exception as e:
+            print(f"[ffmpeg_reader] 初始化失败: {e}")
+            self._ffmpeg_reader = None
+
+    def _get_frame_ffmpeg(self, frame_index: int) -> Optional[np.ndarray]:
+        """通过 moviepy FFMPEG_VideoReader 获取帧（用于 Alpha 视频）"""
+        with self._lock:
+            try:
+                if self._ffmpeg_reader is None or self._video_info is None:
+                    return None
+                timestamp = frame_index / self._video_info.fps
+                frame = self._ffmpeg_reader.get_frame(timestamp)
+                if frame is not None:
+                    # moviepy 返回 RGB/RGBA，直接使用
+                    return frame.copy()
+            except Exception as e:
+                print(f"Error in _get_frame_ffmpeg: {e}")
+            return None
+
     def _adjust_cache_settings(self):
         """根据视频特性动态调整缓存设置"""
         if not self._video_info:
@@ -157,7 +262,10 @@ class VideoProcessor:
                 self._last_accessed_frame = frame_index
                 return frame.copy()
         
-        if self._use_sequential_mode:
+        # Alpha 视频优先用 moviepy ffmpeg reader
+        if self._video_info.has_alpha:
+            frame = self._get_frame_ffmpeg(frame_index)
+        elif self._use_sequential_mode:
             # 顺序模式：利用连续性优化读取
             frame = self._get_frame_sequential(frame_index)
         else:
@@ -172,7 +280,7 @@ class VideoProcessor:
         return None
 
     def _get_frame_seek(self, frame_index: int) -> Optional[np.ndarray]:
-        """使用帧定位获取帧（适用于支持随机访问的视频）"""
+        """使用帧定位获取帧（适用于支持随机访问的普通视频）"""
         with self._lock:
             try:
                 self._cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
@@ -244,6 +352,14 @@ class VideoProcessor:
         """释放视频资源"""
         # 停止预加载线程
         self.stop_preload()
+        
+        # 关闭 moviepy ffmpeg reader
+        if self._ffmpeg_reader is not None:
+            try:
+                self._ffmpeg_reader.close()
+            except Exception:
+                pass
+            self._ffmpeg_reader = None
         
         if self._cap is not None:
             self._cap.release()

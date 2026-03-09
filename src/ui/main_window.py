@@ -1957,6 +1957,17 @@ class MainWindow(QMainWindow):
         self._frame_manager.clear()
         self._frame_manager.add_frames(frames)
         
+        # 检测是否为含 alpha 通道的视频
+        video_has_alpha = self._video_info is not None and self._video_info.has_alpha
+
+        # 若视频本身含 alpha，直接将原始帧设为已处理结果，跳过抠图
+        if video_has_alpha:
+            from src.models.frame_data import FrameStatus
+            for frame in frames:
+                if frame.image is not None:
+                    frame.processed_image = frame.image.copy()
+                    frame.status = FrameStatus.BACKGROUND_REMOVED
+        
         # 更新预览
         self.frame_preview.set_frames(frames)
         
@@ -1998,6 +2009,14 @@ class MainWindow(QMainWindow):
         
         # 初始化动画预览（显示所有选中的帧）
         self._update_animation_preview()
+
+        # 若视频含 alpha，提示用户无需抠图
+        if video_has_alpha:
+            self.status_label.setText(f"提取完成，共 {len(frames)} 帧（视频含Alpha通道，已自动跳过抠图）")
+            QMessageBox.information(
+                self, "Alpha通道视频",
+                "检测到视频本身包含透明通道（Alpha），\n已自动保留透明区域，无需进行抠图处理。\n\n可直接进行后续操作（描边、裁剪、导出等）。"
+            )
     
     def _on_extraction_error(self, error: str):
         self.progress_bar.setVisible(False)

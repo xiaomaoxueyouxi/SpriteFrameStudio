@@ -7,6 +7,39 @@ import numpy as np
 from src.models.frame_data import FrameData, VideoInfo
 
 
+def _extract_frames_via_ffmpeg(
+    video_path: str,
+    timestamps: List[float],
+    progress_callback: Optional[Callable[[int, int, float], None]],
+    cancel_check: Callable[[], bool],
+) -> List[FrameData]:
+    """使用 moviepy FFMPEG_VideoReader 提取带 Alpha 通道的视频帧（RGBA）"""
+    from moviepy.video.io.ffmpeg_reader import FFMPEG_VideoReader
+    frames: List[FrameData] = []
+    total = len(timestamps)
+    reader = FFMPEG_VideoReader(video_path, pixel_format="rgba", print_infos=False)
+    try:
+        for idx, timestamp in enumerate(timestamps):
+            if cancel_check():
+                break
+            frame_rgba = reader.get_frame(timestamp)  # ndarray shape (H, W, 4)
+            if frame_rgba is not None:
+                frame_data = FrameData(
+                    index=idx,
+                    timestamp=timestamp,
+                    image=frame_rgba.copy(),
+                )
+                frames.append(frame_data)
+            if progress_callback:
+                progress_callback(idx + 1, total, (idx + 1) / total * 100)
+    finally:
+        try:
+            reader.close()
+        except Exception:
+            pass
+    return frames
+
+
 class FrameExtractor:
     """帧提取器 - 从视频中按指定参数提取帧"""
     
@@ -59,6 +92,7 @@ class FrameExtractor:
         """
         self._cancel_flag = False
         frames: List[FrameData] = []
+        has_alpha = video_info.has_alpha
         
         # 打开视频
         cap = cv2.VideoCapture(video_path)
@@ -84,6 +118,13 @@ class FrameExtractor:
                     timestamps.append(timestamp)
             
             total_frames = len(timestamps)
+
+            # Alpha 视频：用 moviepy FFMPEG_VideoReader 读帧，绝对可靠
+            if has_alpha:
+                cap.release()
+                return _extract_frames_via_ffmpeg(
+                    video_path, timestamps, progress_callback, lambda: self._cancel_flag
+                )
             
             # 检测是否支持帧定位
             seek_available = self._check_seek_available(cap, video_fps)
@@ -111,7 +152,6 @@ class FrameExtractor:
                     ret, frame = cap.read()
                     
                     if ret:
-                        # BGR转RGB
                         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                         
                         frame_data = FrameData(
@@ -141,7 +181,6 @@ class FrameExtractor:
                     
                     if current_frame in target_frames:
                         idx, timestamp = target_frames[current_frame]
-                        # BGR转RGB
                         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                         
                         frame_data = FrameData(
@@ -196,6 +235,8 @@ class FrameExtractor:
             ret, frame = cap.read()
             
             if ret:
+                if len(frame.shape) == 3 and frame.shape[2] == 4:
+                    return cv2.cvtColor(frame, cv2.COLOR_BGRA2RGBA)
                 return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             return None
         finally:
