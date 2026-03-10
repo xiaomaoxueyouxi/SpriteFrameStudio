@@ -105,6 +105,12 @@ python_env/
 # Wan2.2 AI Video Generation
 Wan2.2-SmoothMix/
 
+# Update sync files
+update/sync_files/
+
+# Workflow temp files
+workflows/last.json
+
 # Conda
 *.conda
 *.tar.bz2
