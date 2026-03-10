@@ -715,8 +715,8 @@ class BackgroundRemover:
         return self._add_outline(rgba, thickness, color)
     
     def _add_outline(self, rgba: np.ndarray, thickness: int, color: tuple = (0, 0, 0)) -> np.ndarray:
-        """给RGBA图像添加轮廓描边（使用OpenCV边缘检测）
-        
+        """给RGBA图像添加轮廓描边（基于精确距离场，类似PS描边效果）
+
         Args:
             rgba: RGBA图像
             thickness: 描边厚度（像素）
@@ -724,45 +724,48 @@ class BackgroundRemover:
         """
         if thickness <= 0:
             return rgba
-        
-        # 提取alpha通道
+
         alpha = rgba[:, :, 3]
-        
-        # 对alpha进行预处理：去噪和平滑（解决AI抠图的边缘噪点问题）
-        # 1. 高斯模糊去噪
-        alpha_smooth = cv2.GaussianBlur(alpha, (5, 5), 0)
-        
-        # 2. 二值化：提高阈值去除半透明区域
-        _, binary = cv2.threshold(alpha_smooth, 127, 255, cv2.THRESH_BINARY)
-        
-        # 3. 形态学操作：闭运算（填充小孔洞）
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-        
-        # 4. 腐蚀操作：轻微收缩边界，使描边更贴合
-        binary = cv2.erode(binary, kernel, iterations=1)
-        
-        # 查找轮廓
-        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # 过滤太小的轮廓（去除噪点）
-        contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 100]
-        
-        if not contours:
-            return rgba
-        
-        # 复制原始图像
-        result = rgba.copy()
-        
-        # 提取RGB通道并确保是连续数组
-        rgb = np.ascontiguousarray(result[:, :, :3])
-        
-        # 在RGB通道上画轮廓（使用拐角抗锤齿）
-        cv2.drawContours(rgb, contours, -1, color, thickness, lineType=cv2.LINE_AA)
-        
-        # 将修改后的RGB放回结果
-        result[:, :, :3] = rgb
-        
+
+        # 1. 二值化alpha，得到干净的主体蒙版
+        _, subject_mask = cv2.threshold(alpha, 127, 255, cv2.THRESH_BINARY)
+
+        # 闭运算填充主体内部小孔洞
+        close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        subject_mask = cv2.morphologyEx(subject_mask, cv2.MORPH_CLOSE, close_kernel)
+
+        # 2. 对主体外部区域计算精确L2距离场
+        #    dist[i,j] = 像素(i,j)到最近主体像素的精确距离（亚像素精度）
+        inv_mask = cv2.bitwise_not(subject_mask)
+        dist = cv2.distanceTransform(inv_mask, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+
+        # 3. 用距离场生成描边alpha
+        #    距离 <= thickness：完全不透明（描边实心区域）
+        #    距离在 thickness ~ thickness+1：线性衰减（外边缘抗锯齿）
+        #    距离 > thickness+1：完全透明
+        stroke_alpha = np.zeros_like(dist, dtype=np.float32)
+        stroke_alpha[dist <= thickness] = 1.0
+        aa_zone = (dist > thickness) & (dist < thickness + 1.0)
+        stroke_alpha[aa_zone] = thickness + 1.0 - dist[aa_zone]
+
+        # 4. 主体alpha：二值蒙版，完全不透明，清除半透明残留
+        src_rgb = rgba[:, :, :3].astype(np.float32)
+        src_a = subject_mask.astype(np.float32) / 255.0
+
+        # 5. Alpha 合成：主体在上，描边在下 (Porter-Duff src-over)
+        out_a = src_a + stroke_alpha * (1.0 - src_a)
+        safe_out_a = np.where(out_a > 0, out_a, 1.0)
+
+        out_r = (src_rgb[:, :, 0] * src_a + color[0] * stroke_alpha * (1.0 - src_a)) / safe_out_a
+        out_g = (src_rgb[:, :, 1] * src_a + color[1] * stroke_alpha * (1.0 - src_a)) / safe_out_a
+        out_b = (src_rgb[:, :, 2] * src_a + color[2] * stroke_alpha * (1.0 - src_a)) / safe_out_a
+
+        result = np.zeros_like(rgba)
+        result[:, :, 0] = np.clip(out_r, 0, 255).astype(np.uint8)
+        result[:, :, 1] = np.clip(out_g, 0, 255).astype(np.uint8)
+        result[:, :, 2] = np.clip(out_b, 0, 255).astype(np.uint8)
+        result[:, :, 3] = np.clip(out_a * 255, 0, 255).astype(np.uint8)
+
         return result
 
     
