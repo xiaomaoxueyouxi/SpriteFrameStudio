@@ -309,14 +309,10 @@ class SmoothMixWorker(QThread):
         if not workflow:
             raise ValueError("无法加载工作流模板")
         
-        # Wan模型要求帧数必须是 4n+1 的形式（如 17, 25, 33, 41, 49...）
-        # 自动调整帧数到最近的合法值
+        # 检查帧数是否符合 4n+1 规则
         frames = task.frames
-        remainder = (frames - 1) % 4
-        if remainder != 0:
-            # 向上调整到最近的 4n+1
-            frames = frames + (4 - remainder)
-            self._log(f"帧数已自动调整: {task.frames} -> {frames} (必须为4n+1)")
+        if (frames - 1) % 4 != 0:
+            self._log(f"警告: 帧数 {frames} 不是 4n+1 格式，视频末尾可能会淡出！建议使用: 17, 25, 33, 41, 49...")
         
         if task.workflow_type == WORKFLOW_GENERIC:
             # 通用版工作流节点映射
@@ -330,7 +326,7 @@ class SmoothMixWorker(QThread):
             workflow["65"]["inputs"]["height"] = task.height
             workflow["83"]["inputs"]["width"] = task.width
             workflow["83"]["inputs"]["height"] = task.height
-            workflow["83"]["inputs"]["length"] = frames
+            workflow["83"]["inputs"]["length"] = task.frames
             workflow["101"]["inputs"]["steps"] = task.steps * 2  # 通用版步数是总步数
             workflow["102"]["inputs"]["steps"] = task.steps * 2
             workflow["101"]["inputs"]["end_at_step"] = task.steps
@@ -349,7 +345,7 @@ class SmoothMixWorker(QThread):
             workflow["240"]["inputs"]["text"] = task.negative_prompt
             workflow["252"]["inputs"]["value"] = task.width
             workflow["253"]["inputs"]["value"] = task.height
-            workflow["285"]["inputs"]["value"] = frames
+            workflow["285"]["inputs"]["value"] = task.frames
             workflow["254"]["inputs"]["value"] = task.steps
             workflow["229"]["inputs"]["seed"] = task.seed
             workflow["236"]["inputs"]["frame_rate"] = task.fps

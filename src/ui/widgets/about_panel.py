@@ -55,7 +55,7 @@ class AboutPanel(QWidget):
         bilibili_label.setStyleSheet("color: #00a1d6;")
         author_layout.addWidget(bilibili_label)
 
-        github_label = QLabel('<a href="https://github.com/game-cat/SpriteFrameStudio">GitHub 仓库</a>')
+        github_label = QLabel('<a href="https://github.com/xiaomaoxueyouxi/SpriteFrameStudio">GitHub 仓库</a>')
         github_label.setOpenExternalLinks(True)
         github_label.setStyleSheet("color: #fff;")
         author_layout.addWidget(github_label)

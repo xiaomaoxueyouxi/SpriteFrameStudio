@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QTabWidget, QProgressBar, QStatusBar, QFileDialog,
     QMessageBox, QComboBox, QCheckBox, QToolBar, QApplication,
     QScrollArea, QFrame, QGridLayout, QColorDialog, QSpinBox,
-    QStackedWidget, QSizePolicy
+    QStackedWidget, QSizePolicy, QAbstractSpinBox
 )
 from PySide6.QtCore import Qt, Slot, Signal, QTimer
 from PySide6.QtGui import QAction, QColor, QPainter, QFont
@@ -34,8 +34,9 @@ from src.workers.extraction_worker import ExtractionWorker
 from src.workers.background_worker import BackgroundWorker
 from src.workers.pose_worker import PoseWorker
 
-from src.models.frame_data import VideoInfo
+from src.models.frame_data import VideoInfo, FrameData
 from src.utils.config import config
+from src.utils.crossfade import apply_transition_to_frame_data
 
 
 class VerticalTabButton(QPushButton):
@@ -370,6 +371,9 @@ class MainWindow(QMainWindow):
         self.fps_spin.setRange(config.EXTRACT_FPS_MIN, config.EXTRACT_FPS_MAX)
         self.fps_spin.setValue(config.extract_fps)
         self.fps_spin.setSuffix(" fps")
+        # 抽帧帧率固定为视频原始帧率，禁止用户修改
+        self.fps_spin.setReadOnly(True)
+        self.fps_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         fps_row.addWidget(self.fps_spin)
         fps_layout.addLayout(fps_row)
         
@@ -1085,6 +1089,9 @@ class MainWindow(QMainWindow):
         self.frame_preview.export_single_frame.connect(self.export_single_frame)
         self.frame_preview.image_edited.connect(self._on_frame_image_edited)
         
+        # 补帧完成信号
+        self.animation_preview.rife_completed.connect(self._on_rife_frames_ready)
+        
         # Tab切换
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
         
@@ -1402,26 +1409,31 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "没有可导出的帧")
             return
         
+        # 获取要导出的帧
+        frames = []
+        for idx in selected_indices:
+            frame = self._frame_manager.get_frame(idx)
+            if frame:
+                frames.append(frame)
+        
+        # 查询循环过渡设置，非破坏性地应用到导出帧
+        cf_enabled, cf_count, cf_mode = self.animation_preview.get_crossfade_settings()
+        if cf_enabled and len(frames) > 1:
+            frames = apply_transition_to_frame_data(frames, cf_count, cf_mode)
+        
         # 打开导出对话框
-        dialog = ExportDialog(frame_count=len(selected_indices), parent=self)
+        dialog = ExportDialog(frame_count=len(frames), parent=self)
         
         # 设置当前帧尺寸（用于宽高比计算和默认值）
-        if selected_indices:
-            first_frame = self._frame_manager.get_frame(selected_indices[0])
+        if frames:
+            first_frame = frames[0]
             if first_frame and first_frame.display_image is not None:
                 h, w = first_frame.display_image.shape[:2]
                 dialog.set_original_size(w, h)
         
         if dialog.exec() == ExportDialog.Accepted:
             export_config = dialog.get_config()
-            export_config.frame_indices = selected_indices
-            
-            # 获取要导出的帧
-            frames = []
-            for idx in selected_indices:
-                frame = self._frame_manager.get_frame(idx)
-                if frame:
-                    frames.append(frame)
+            export_config.frame_indices = list(range(len(frames)))
             
             try:
                 self.status_label.setText("正在导出...")
@@ -1945,6 +1957,17 @@ class MainWindow(QMainWindow):
         self._frame_manager.clear()
         self._frame_manager.add_frames(frames)
         
+        # 检测是否为含 alpha 通道的视频
+        video_has_alpha = self._video_info is not None and self._video_info.has_alpha
+
+        # 若视频本身含 alpha，直接将原始帧设为已处理结果，跳过抠图
+        if video_has_alpha:
+            from src.models.frame_data import FrameStatus
+            for frame in frames:
+                if frame.image is not None:
+                    frame.processed_image = frame.image.copy()
+                    frame.status = FrameStatus.BACKGROUND_REMOVED
+        
         # 更新预览
         self.frame_preview.set_frames(frames)
         
@@ -1986,6 +2009,14 @@ class MainWindow(QMainWindow):
         
         # 初始化动画预览（显示所有选中的帧）
         self._update_animation_preview()
+
+        # 若视频含 alpha，提示用户无需抠图
+        if video_has_alpha:
+            self.status_label.setText(f"提取完成，共 {len(frames)} 帧（视频含Alpha通道，已自动跳过抠图）")
+            QMessageBox.information(
+                self, "Alpha通道视频",
+                "检测到视频本身包含透明通道（Alpha），\n已自动保留透明区域，无需进行抠图处理。\n\n可直接进行后续操作（描边、裁剪、导出等）。"
+            )
     
     def _on_extraction_error(self, error: str):
         self.progress_bar.setVisible(False)
@@ -2744,6 +2775,47 @@ class MainWindow(QMainWindow):
         count = self._frame_manager.frame_count
         selected = self._frame_manager.selected_count
         self.frame_count_label.setText(f"帧数: {count} (选中: {selected})")
+    
+    def _on_rife_frames_ready(self, rife_images: list):
+        """补帧完成，将补帧追加到帧管理"""
+        if not rife_images:
+            return
+        
+        # 计算新帧的起始索引和时间戳
+        current_count = self._frame_manager.frame_count
+        
+        # 获取最后一帧的时间戳作为基准
+        last_frame = self._frame_manager.get_frame(current_count - 1) if current_count > 0 else None
+        base_timestamp = last_frame.timestamp if last_frame else 0.0
+        
+        # 创建 FrameData 对象，标记为 "补"
+        new_frames = []
+        for i, img in enumerate(rife_images):
+            frame = FrameData(
+                index=current_count + i,
+                timestamp=base_timestamp + (i + 1) * 0.001,  # 微小递增时间戳
+                image=img,
+                is_selected=True,
+                tag="补",
+            )
+            new_frames.append(frame)
+        
+        # 追加到帧管理器
+        self._frame_manager.add_frames(new_frames)
+        
+        # 刷新帧预览网格
+        self.frame_preview.set_frames(self._frame_manager.frames)
+        
+        # 更新帧计数
+        self._update_frame_count()
+        
+        # 更新动画预览
+        self._update_animation_preview()
+        
+        self.status_label.setText(
+            f"已将 {len(rife_images)} 帧补帧添加到帧管理（标签：补），总帧数: {self._frame_manager.frame_count}"
+        )
+        print(f"[RIFE] 已追加 {len(rife_images)} 帧到帧管理器，总帧数: {self._frame_manager.frame_count}")
     
     def _find_most_similar_frames(self):
         """查找所有帧的最相似帧，要求相隔X帧以上"""

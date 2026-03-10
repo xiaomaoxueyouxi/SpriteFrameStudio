@@ -1,20 +1,29 @@
 """动画预览控件 - 使用透明叠加方案，无需实时合成"""
-from typing import List, Optional
+from typing import List, Optional, Tuple
+from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QSlider, QStyle, QSizePolicy, QComboBox
+    QPushButton, QSlider, QStyle, QSizePolicy, QComboBox,
+    QCheckBox, QSpinBox, QTabWidget, QButtonGroup, QRadioButton,
+    QProgressBar, QMessageBox
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QPixmap, QImage
 import numpy as np
 
+from src.utils.crossfade import apply_loop_transition
+
 
 class AnimationPreview(QWidget):
     """动画预览控件 - 使用透明叠加方案，无需实时合成"""
     
+    # 信号：补帧完成
+    rife_completed = Signal(list)  # 参数：List[np.ndarray] 生成的补帧图像列表
+    
     def __init__(self, parent=None):
         super().__init__(parent)
         self._frames: List[np.ndarray] = []
+        self._original_frames: List[np.ndarray] = []  # 原始帧（crossfade前）
         self._timestamps: List[float] = None
         self._current_index = 0
         self._is_playing = False
@@ -22,6 +31,15 @@ class AnimationPreview(QWidget):
         self._bg_mode = "gray"  # 背景模式: checkerboard, white, black, gray, custom
         self._custom_bg_color = (128, 128, 128)
         self._cached_pixmaps: List[QPixmap] = []
+        self._crossfade_enabled = False
+        self._crossfade_count = 5
+        self._crossfade_mode = "blend"  # "blend" 或 "align"
+        
+        # RIFE补帧相关属性
+        self._rife_frames: List[np.ndarray] = []  # 补帧数据
+        self._append_rife_to_preview: bool = True  # 是否追加到预览
+        self._rife_worker = None  # 后台线程
+        self._rife_output_dir = Path("output/rife_frames")  # 补帧输出目录
         
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_tick)
@@ -106,6 +124,93 @@ class AnimationPreview(QWidget):
         
         bg_layout.addStretch()
         layout.addLayout(bg_layout)
+        
+        # ========== Tab区域：循环过渡 + 首尾补帧 ==========
+        self.effect_tab = QTabWidget()
+        self.effect_tab.setStyleSheet("QTabWidget::pane { border: none; }")
+        
+        # --- Tab 1: 循环过渡 ---
+        crossfade_tab = QWidget()
+        crossfade_layout = QHBoxLayout(crossfade_tab)
+        crossfade_layout.setContentsMargins(8, 4, 8, 4)
+        
+        self.crossfade_check = QCheckBox("循环过渡")
+        self.crossfade_check.setChecked(False)
+        self.crossfade_check.toggled.connect(self._on_crossfade_toggled)
+        crossfade_layout.addWidget(self.crossfade_check)
+        
+        self.crossfade_mode_combo = QComboBox()
+        self.crossfade_mode_combo.addItem("像素混合", "blend")
+        self.crossfade_mode_combo.addItem("轮廓对齐", "align")
+        self.crossfade_mode_combo.setEnabled(False)
+        self.crossfade_mode_combo.currentIndexChanged.connect(self._on_crossfade_mode_changed)
+        crossfade_layout.addWidget(self.crossfade_mode_combo)
+        
+        crossfade_layout.addWidget(QLabel("帧数:"))
+        self.crossfade_spin = QSpinBox()
+        self.crossfade_spin.setRange(1, 30)
+        self.crossfade_spin.setValue(5)
+        self.crossfade_spin.setEnabled(False)
+        self.crossfade_spin.valueChanged.connect(self._on_crossfade_count_changed)
+        crossfade_layout.addWidget(self.crossfade_spin)
+        
+        crossfade_layout.addStretch()
+        self.effect_tab.addTab(crossfade_tab, "循环过渡")
+        
+        # --- Tab 2: 首尾补帧 ---
+        rife_tab = QWidget()
+        rife_vlayout = QVBoxLayout(rife_tab)
+        rife_vlayout.setContentsMargins(8, 4, 8, 4)
+        rife_vlayout.setSpacing(4)
+        
+        # 红字警告提示
+        warning_label = QLabel("⚠️ 请在抠图前补帧！！透明图补帧效果不好")
+        warning_label.setStyleSheet("color: #ff4444; font-weight: bold; font-size: 12px;")
+        warning_label.setWordWrap(True)
+        rife_vlayout.addWidget(warning_label)
+        
+        rife_layout = QHBoxLayout()
+        rife_layout.setContentsMargins(0, 0, 0, 0)
+        
+        rife_layout.addWidget(QLabel("补帧数量:"))
+        
+        # 帧数量单选按钮组 (1-7帧)
+        self.rife_frame_group = QButtonGroup(self)
+        for i in range(1, 8):
+            radio = QRadioButton(str(i))
+            radio.setStyleSheet("margin: 0 2px;")
+            self.rife_frame_group.addButton(radio, i)
+            rife_layout.addWidget(radio)
+            if i == 3:  # 默认选择3帧
+                radio.setChecked(True)
+        
+        rife_layout.addSpacing(10)
+        
+        # 追加预览复选框
+        self.append_rife_check = QCheckBox("追加预览")
+        self.append_rife_check.setChecked(True)
+        self.append_rife_check.toggled.connect(self._on_append_rife_toggled)
+        rife_layout.addWidget(self.append_rife_check)
+        
+        rife_layout.addSpacing(10)
+        
+        # 开始补帧按钮
+        self.rife_btn = QPushButton("开始补帧")
+        self.rife_btn.clicked.connect(self._start_rife_interpolation)
+        rife_layout.addWidget(self.rife_btn)
+        
+        rife_layout.addStretch()
+        rife_vlayout.addLayout(rife_layout)
+        self.effect_tab.addTab(rife_tab, "首尾补帧")
+        
+        layout.addWidget(self.effect_tab)
+        
+        # 进度条（隐藏状态）
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setStyleSheet("QProgressBar { height: 20px; }")
+        layout.addWidget(self.progress_bar)
     
     def _update_bg_style(self):
         """更新背景样式"""
@@ -123,18 +228,24 @@ class AnimationPreview(QWidget):
     def set_frames(self, frames: List[np.ndarray], timestamps: List[float] = None):
         """设置帧序列"""
         self.stop()
-        self._frames = frames
+        self._original_frames = list(frames)
         self._timestamps = timestamps
         self._current_index = 0
         
-        # 缓存所有帧的 pixmap（保留原始格式，透明自动叠加）
-        self._cache_all_pixmaps()
+        # 清空补帧（设置新帧时重置）
+        self._clear_rife_frames()
         
-        self.frame_slider.setRange(0, max(0, len(frames) - 1))
-        self.frame_slider.setValue(0)
+        # 更新过渡帧数上限
+        max_crossfade = max(1, len(frames) // 2)
+        self.crossfade_spin.blockSignals(True)
+        self.crossfade_spin.setRange(1, max_crossfade)
+        if self._crossfade_count > max_crossfade:
+            self._crossfade_count = max_crossfade
+            self.crossfade_spin.setValue(max_crossfade)
+        self.crossfade_spin.blockSignals(False)
         
-        self._update_display()
-        self._update_labels()
+        # 应用交叉淡入淡出（内部会更新 self._frames 并缓存 pixmap）
+        self._apply_crossfade()
         
         # 确保速度滑块显示正确的值
         self.speed_slider.blockSignals(True)
@@ -154,13 +265,17 @@ class AnimationPreview(QWidget):
         if array is None:
             return QPixmap()
         
+        # 确保数组是 C-contiguous（QImage 需要）
+        if not array.flags['C_CONTIGUOUS']:
+            array = np.ascontiguousarray(array)
+        
         h, w = array.shape[:2]
         
         if len(array.shape) == 2:
             qimg = QImage(array.data, w, h, w, QImage.Format_Grayscale8)
-        elif array.shape[2] == 3:
+        elif len(array.shape) == 3 and array.shape[2] == 3:
             qimg = QImage(array.data, w, h, w * 3, QImage.Format_RGB888)
-        elif array.shape[2] == 4:
+        elif len(array.shape) == 3 and array.shape[2] == 4:
             # RGBA 图 - 保留透明通道
             qimg = QImage(array.data, w, h, w * 4, QImage.Format_RGBA8888)
         else:
@@ -172,9 +287,11 @@ class AnimationPreview(QWidget):
         """清空帧"""
         self.stop()
         self._frames = []
+        self._original_frames = []
         self._timestamps = None
         self._current_index = 0
         self._cached_pixmaps = []
+        self._clear_rife_frames()
         self.frame_slider.setRange(0, 0)
         self.image_label.clear()
         self._update_labels()
@@ -270,16 +387,32 @@ class AnimationPreview(QWidget):
             self.image_label.clear()
             return
         
+        # 安全检查：确保缓存和帧列表同步
+        if self._current_index >= len(self._cached_pixmaps):
+            self.image_label.clear()
+            return
+        
         pixmap = self._cached_pixmaps[self._current_index]
         
         # 获取原始图像尺寸
         orig_width = pixmap.width()
         orig_height = pixmap.height()
         
-        # 获取显示区域尺寸
-        display_size = self.image_label.size()
-        max_width = display_size.width() - 20  # 留一些边距
-        max_height = display_size.height() - 60  # 留出控制栏空间
+        # 直接使用 image_label 自身尺寸，避免硬编码控制栏高度导致裁剪
+        label_size = self.image_label.size()
+        if label_size.width() > 0 and label_size.height() > 0:
+            max_width = label_size.width()
+            max_height = label_size.height()
+        else:
+            # 首次显示时 label 尺寸可能为 0，降级回父容器推算
+            parent_size = self.size()
+            max_width = parent_size.width() - 20
+            max_height = parent_size.height() - 220  # 保守估算控制栏高度
+        
+        # 确保有有效的显示区域
+        if max_width <= 0 or max_height <= 0:
+            self.image_label.setPixmap(pixmap)
+            return
         
         # 计算合适的缩放比例
         scale_x = max_width / orig_width
@@ -303,6 +436,157 @@ class AnimationPreview(QWidget):
         total = len(self._frames)
         current = self._current_index + 1 if total > 0 else 0
         self.frame_label.setText(f"{current} / {total}")
+    
+    # ========== 循环过渡相关方法 ==========
+    
+    def _on_crossfade_toggled(self, enabled: bool):
+        """循环过渡开关切换"""
+        self._crossfade_enabled = enabled
+        self.crossfade_spin.setEnabled(enabled)
+        self.crossfade_mode_combo.setEnabled(enabled)
+        if self._original_frames:
+            self._apply_crossfade()
+    
+    def _on_crossfade_count_changed(self, value: int):
+        """过渡帧数变更"""
+        self._crossfade_count = value
+        if self._crossfade_enabled and self._original_frames:
+            self._apply_crossfade()
+    
+    def _on_crossfade_mode_changed(self, index: int):
+        """过渡模式变更"""
+        self._crossfade_mode = self.crossfade_mode_combo.currentData()
+        if self._crossfade_enabled and self._original_frames:
+            self._apply_crossfade()
+    
+    def _apply_crossfade(self):
+        """应用循环过渡并刷新显示"""
+        # 先停止播放
+        was_playing = self._is_playing
+        self.pause()
+        
+        # 获取基础帧（原始帧 + 补帧）
+        base_frames = self._get_base_frames()
+        
+        if self._crossfade_enabled and len(base_frames) > 1:
+            self._frames = apply_loop_transition(
+                base_frames, self._crossfade_count,
+                mode=self._crossfade_mode
+            )
+        else:
+            self._frames = list(base_frames)
+        
+        # 确保当前索引不越界
+        if self._current_index >= len(self._frames):
+            self._current_index = 0
+        
+        self._cache_all_pixmaps()
+        self.frame_slider.setRange(0, max(0, len(self._frames) - 1))
+        self.frame_slider.setValue(self._current_index)
+        self._update_display()
+        self._update_labels()
+    
+    def get_crossfade_settings(self) -> Tuple[bool, int, str]:
+        """获取当前循环过渡设置（供导出使用）"""
+        return (self._crossfade_enabled, self._crossfade_count, self._crossfade_mode)
+    
+    # ========== 首尾补帧相关方法 ==========
+    
+    def _get_base_frames(self) -> List[np.ndarray]:
+        """获取基础帧（原始帧 + 补帧，如果启用追加预览）"""
+        if self._append_rife_to_preview and self._rife_frames:
+            return list(self._original_frames) + self._rife_frames
+        return list(self._original_frames)
+    
+    def _clear_rife_frames(self):
+        """清空补帧数据"""
+        self._rife_frames = []
+        
+        # 删除输出目录中的旧文件
+        if self._rife_output_dir.exists():
+            for old_file in self._rife_output_dir.glob("*.png"):
+                old_file.unlink()
+    
+    def _on_append_rife_toggled(self, checked: bool):
+        """追加预览开关切换"""
+        self._append_rife_to_preview = checked
+        # 重新应用效果
+        self._apply_crossfade()
+    
+    def _start_rife_interpolation(self):
+        """开始RIFE补帧"""
+        # 检查是否有帧
+        if not self._original_frames or len(self._original_frames) < 2:
+            QMessageBox.warning(self, "提示", "至少需要选择2帧才能进行首尾补帧")
+            return
+        
+        # 获取补帧数量
+        num_frames = self.rife_frame_group.checkedId()
+        if num_frames < 1:
+            num_frames = 3
+        
+        # 清空之前的补帧
+        self._clear_rife_frames()
+        
+        # 获取尾首帧（最后一帧 -> 第一帧，用于循环过渡）
+        last_frame = self._original_frames[-1]  # 尾帧作为输入的第一帧
+        first_frame = self._original_frames[0]  # 首帧作为输入的最后一帧
+        
+        # 禁用按钮，显示进度条
+        self.rife_btn.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, num_frames + 1)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("加载模型...")
+        
+        # 创建工作线程
+        from src.tools.rife import RifeWorker
+        self._rife_worker = RifeWorker()
+        # 尾帧作为起点，首帧作为终点（尾首帧补帧）
+        self._rife_worker.setup(last_frame, first_frame, num_frames, self._rife_output_dir)
+        self._rife_worker.progress.connect(self._on_rife_progress)
+        self._rife_worker.finished.connect(self._on_rife_finished)
+        self._rife_worker.error.connect(self._on_rife_error)
+        self._rife_worker.start()
+    
+    def _on_rife_progress(self, current: int, total: int, message: str):
+        """补帧进度回调"""
+        self.progress_bar.setMaximum(total)
+        self.progress_bar.setValue(current)
+        self.progress_bar.setFormat(message)
+    
+    def _on_rife_finished(self, frames: List[np.ndarray]):
+        """补帧完成"""
+        # 先停止播放，避免更新过程中索引越界
+        self.stop()
+        
+        self._rife_frames = frames
+        self.rife_btn.setEnabled(True)
+        self.progress_bar.setVisible(False)
+        
+        # 刷新预览
+        self._apply_crossfade()
+        
+        # 发送信号（传递补帧图像列表）
+        self.rife_completed.emit(frames)
+        
+        # 显示提示
+        if self._append_rife_to_preview:
+            QMessageBox.information(
+                self, "补帧完成", 
+                f"已生成 {len(frames)} 帧中间帧\n已追加到预览序列末尾，同时已添加到帧管理（标签：补）"
+            )
+        else:
+            QMessageBox.information(
+                self, "补帧完成", 
+                f"已生成 {len(frames)} 帧中间帧\n帧文件保存在: {self._rife_output_dir}\n已添加到帧管理（标签：补）"
+            )
+    
+    def _on_rife_error(self, error_msg: str):
+        """补帧出错"""
+        self.rife_btn.setEnabled(True)
+        self.progress_bar.setVisible(False)
+        QMessageBox.critical(self, "补帧失败", f"错误: {error_msg}")
     
     def resizeEvent(self, event):
         super().resizeEvent(event)

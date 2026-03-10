@@ -21,6 +21,9 @@ class AIModel(str, Enum):
     # ISNET = "isnet-general-use"        # 通用场景 (176MB) - 已移除
     ISNET_ANIME = "isnet-anime"        # 动漫专用 (176MB)
     BRIA_RMBG = "bria-rmbg-2.0"        # 新一代高精度模型
+    BIREFNET = "birefnet"              # BiRefNet 高精度二分图像分割 (FP32)
+    BIREFNET_FP16 = "birefnet-fp16"    # BiRefNet 半精度版本 (FP16，更快更省显存)
+    BIREFNET_TOONOUT = "birefnet-toonout"  # BiRefNet ToonOut 动漫优化版 (FP32)
 
 
 # 模型信息
@@ -66,6 +69,27 @@ AI_MODEL_INFO: Dict[str, dict] = {
         "size": "100MB+",
         "url": "本地加载",
         "input_size": (1024, 1024),
+    },
+    "birefnet": {
+        "name": "BiRefNet (高精度)",
+        "size": "928MB",
+        "url": "https://www.modelscope.cn/models/onnx-community/BiRefNet-ONNX",
+        "input_size": (1024, 1024),
+        "model_file": "birefnet/model.onnx",
+    },
+    "birefnet-fp16": {
+        "name": "BiRefNet FP16 (高精度/快速)",
+        "size": "467MB",
+        "url": "https://www.modelscope.cn/models/onnx-community/BiRefNet-ONNX",
+        "input_size": (1024, 1024),
+        "model_file": "birefnet/model_fp16.onnx",
+    },
+    "birefnet-toonout": {
+        "name": "BiRefNet ToonOut (动漫优化)",
+        "size": "885MB",
+        "url": "https://huggingface.co/joelseytre/toonout",
+        "input_size": (1024, 1024),
+        "model_file": "birefnet_finetuned_toonout.pth",
     },
 }
 
@@ -174,15 +198,245 @@ class U2NetLocalSession:
         return [mask]
 
 
+class BiRefNetSession:
+    """BiRefNet ONNX 会话，专用于 BiRefNet 模型的推理"""
+    
+    def __init__(self, model_path: str, model_name: str = "birefnet",
+                 force_cpu: bool = False,
+                 progress_callback: Optional[Callable[[str], None]] = None):
+        import onnxruntime as ort
+        
+        self.model_name = model_name
+        self.input_size = AI_MODEL_INFO.get(model_name, {}).get("input_size", (1024, 1024))
+        
+        if progress_callback:
+            progress_callback("正在初始化BiRefNet ONNX运行时...")
+        
+        sess_opts = ort.SessionOptions()
+        sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        
+        if force_cpu:
+            providers = ['CPUExecutionProvider']
+            if progress_callback:
+                progress_callback("使用 CPU 模式...")
+        else:
+            available_providers = ort.get_available_providers()
+            use_cuda = 'CUDAExecutionProvider' in available_providers
+            
+            if use_cuda:
+                providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+                if progress_callback:
+                    progress_callback("正在尝试启用 GPU 加速...")
+            else:
+                providers = ['CPUExecutionProvider']
+                if progress_callback:
+                    progress_callback("GPU 不可用，使用 CPU 模式...")
+        
+        try:
+            self.inner_session = ort.InferenceSession(
+                model_path,
+                sess_options=sess_opts,
+                providers=providers
+            )
+            
+            actual_providers = self.inner_session.get_providers()
+            self.device_type = "GPU (CUDA)" if 'CUDAExecutionProvider' in actual_providers else "CPU"
+            
+            if progress_callback:
+                if not force_cpu and 'CUDAExecutionProvider' not in available_providers and self.device_type == "CPU":
+                    progress_callback(f"警告: GPU 初始化失败，已回退到 CPU")
+                else:
+                    progress_callback(f"BiRefNet模型加载完成 (实际设备: {self.device_type})")
+        except Exception as e:
+            if not force_cpu and 'CUDAExecutionProvider' in providers:
+                if progress_callback:
+                    progress_callback(f"GPU 加载失败，回退到 CPU: {str(e)}")
+                providers = ['CPUExecutionProvider']
+                self.inner_session = ort.InferenceSession(
+                    model_path,
+                    sess_options=sess_opts,
+                    providers=providers
+                )
+                self.device_type = "CPU"
+            else:
+                raise
+    
+    def predict(self, img):
+        """预测遮罩 - BiRefNet专用预处理和后处理"""
+        from PIL import Image
+        
+        mean = (0.485, 0.456, 0.406)
+        std = (0.229, 0.224, 0.225)
+        
+        im = img.convert("RGB").resize(self.input_size, Image.Resampling.LANCZOS)
+        im_ary = np.array(im, dtype=np.float32) / 255.0
+        
+        tmpImg = np.zeros((im_ary.shape[0], im_ary.shape[1], 3), dtype=np.float32)
+        tmpImg[:, :, 0] = (im_ary[:, :, 0] - mean[0]) / std[0]
+        tmpImg[:, :, 1] = (im_ary[:, :, 1] - mean[1]) / std[1]
+        tmpImg[:, :, 2] = (im_ary[:, :, 2] - mean[2]) / std[2]
+        
+        tmpImg = tmpImg.transpose((2, 0, 1))
+        
+        input_name = self.inner_session.get_inputs()[0].name
+        input_data = {input_name: np.expand_dims(tmpImg, 0).astype(np.float32)}
+        
+        ort_outs = self.inner_session.run(None, input_data)
+        
+        # BiRefNet输出多个尺度的预测，取最后一个（最精细的）
+        pred = ort_outs[-1]
+        
+        # 应用sigmoid激活
+        pred = 1 / (1 + np.exp(-pred))
+        
+        # 提取单通道遮罩
+        if pred.ndim == 4:
+            pred = pred[:, 0, :, :]
+        pred = np.squeeze(pred)
+        
+        # 归一化到 [0, 1]
+        ma = np.max(pred)
+        mi = np.min(pred)
+        if ma - mi > 1e-6:
+            pred = (pred - mi) / (ma - mi)
+        
+        mask = Image.fromarray((pred.clip(0, 1) * 255).astype("uint8"), mode="L")
+        mask = mask.resize(img.size, Image.Resampling.LANCZOS)
+        
+        return [mask]
+
+
+def _ensure_cuda_dll_paths():
+    """确保 CUDA DLL 搜索路径正确（Windows 便携环境兼容）"""
+    import sys
+    import os
+    if sys.platform != 'win32':
+        return
+    # 便携 Python 环境下，CUDA 运行库在 Library\bin 中
+    lib_bin = os.path.join(sys.exec_prefix, "Library", "bin")
+    if os.path.exists(lib_bin):
+        try:
+            os.add_dll_directory(lib_bin)
+        except OSError:
+            pass
+
+
+class BiRefNetTorchSession:
+    """BiRefNet PyTorch 会话，用于 ToonOut 等需要 DeformConv 的模型"""
+    
+    def __init__(self, model_path: str, model_name: str = "birefnet-toonout",
+                 force_cpu: bool = False,
+                 progress_callback: Optional[Callable[[str], None]] = None):
+        _ensure_cuda_dll_paths()
+        try:
+            import torch
+        except OSError as e:
+            raise OSError(
+                f"PyTorch 加载失败，可能是 CUDA/cuDNN 版本不兼容: {e}\n"
+                f"建议: 1) 检查 python_env\\Library\\bin 下是否有完整的 CUDA 运行时\n"
+                f"      2) 删除 torch\\lib 下重复的 cudnn*.dll 以避免版本冲突\n"
+                f"      3) 或使用 CPU-only 版本的 PyTorch"
+            ) from e
+        import sys
+        
+        self.model_name = model_name
+        self.input_size = AI_MODEL_INFO.get(model_name, {}).get("input_size", (1024, 1024))
+        
+        if progress_callback:
+            progress_callback("正在初始化BiRefNet PyTorch运行时...")
+        
+        # 添加 BiRefNet 源代码路径
+        code_dir = Path(__file__).parent.parent / "tools" / "BiRefNet-main"
+        if str(code_dir) not in sys.path:
+            sys.path.insert(0, str(code_dir))
+        
+        from birefnet.models.birefnet import BiRefNet
+        
+        # 决定设备
+        if force_cpu:
+            self.device = torch.device("cpu")
+            if progress_callback:
+                progress_callback("使用 CPU 模式...")
+        else:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            if progress_callback:
+                progress_callback(f"使用 {'GPU (CUDA)' if self.device.type == 'cuda' else 'CPU'} 模式...")
+        
+        self.device_type = "GPU (CUDA)" if self.device.type == "cuda" else "CPU"
+        
+        # 加载模型
+        self.model = BiRefNet(bb_pretrained=False)
+        
+        # 获取 .pth 文件路径
+        pth_path = Path(__file__).parent.parent.parent / "models" / "birefnet_finetuned_toonout.pth"
+        
+        if progress_callback:
+            progress_callback(f"加载权重: {pth_path.name}...")
+        
+        state_dict = torch.load(pth_path, map_location='cpu')
+        
+        # 处理键名前缀
+        new_state_dict = {}
+        for key, value in state_dict.items():
+            new_key = key.replace('module._orig_mod.', '')
+            new_state_dict[new_key] = value
+        
+        self.model.load_state_dict(new_state_dict)
+        self.model.to(self.device)
+        self.model.eval()
+        
+        if progress_callback:
+            progress_callback(f"BiRefNet ToonOut 模型加载完成 (设备: {self.device_type})")
+    
+    def predict(self, img):
+        """预测遮罩"""
+        import torch
+        from PIL import Image
+        
+        mean = (0.485, 0.456, 0.406)
+        std = (0.229, 0.224, 0.225)
+        
+        im = img.convert("RGB").resize(self.input_size, Image.Resampling.LANCZOS)
+        im_ary = np.array(im, dtype=np.float32) / 255.0
+        
+        tmpImg = np.zeros((im_ary.shape[0], im_ary.shape[1], 3), dtype=np.float32)
+        tmpImg[:, :, 0] = (im_ary[:, :, 0] - mean[0]) / std[0]
+        tmpImg[:, :, 1] = (im_ary[:, :, 1] - mean[1]) / std[1]
+        tmpImg[:, :, 2] = (im_ary[:, :, 2] - mean[2]) / std[2]
+        
+        tmpImg = tmpImg.transpose((2, 0, 1))
+        input_tensor = torch.from_numpy(tmpImg).unsqueeze(0).to(self.device)
+        
+        with torch.no_grad():
+            outputs = self.model(input_tensor)
+            pred = outputs[-1].sigmoid()
+        
+        pred = pred.cpu().numpy()
+        
+        if pred.ndim == 4:
+            pred = pred[:, 0, :, :]
+        pred = np.squeeze(pred)
+        
+        ma = np.max(pred)
+        mi = np.min(pred)
+        if ma - mi > 1e-6:
+            pred = (pred - mi) / (ma - mi)
+        
+        mask = Image.fromarray((pred.clip(0, 1) * 255).astype("uint8"), mode="L")
+        mask = mask.resize(img.size, Image.Resampling.LANCZOS)
+        
+        return [mask]
+
+
 class BackgroundRemover:
     """背景去除器"""
     
     # 缓存已加载的模型
-    _model_cache: Dict[str, U2NetLocalSession] = {}
+    _model_cache: Dict[str, object] = {}
     
     def __init__(self, progress_callback: Optional[Callable[[str], None]] = None):
         self._current_model: Optional[str] = None
-        self._rembg_session: Optional[U2NetLocalSession] = None
+        self._rembg_session = None
         self._cancel_flag = False
         self._progress_callback = progress_callback
     
@@ -199,6 +453,15 @@ class BackgroundRemover:
     def get_model_path(model_name: str) -> Optional[Path]:
         """获取模型文件路径"""
         project_root = Path(__file__).parent.parent.parent
+        
+        # 优先检查 AI_MODEL_INFO 中的自定义路径 (支持子目录结构)
+        info = AI_MODEL_INFO.get(model_name, {})
+        if "model_file" in info:
+            custom_path = project_root / "models" / info["model_file"]
+            if custom_path.exists():
+                return custom_path
+        
+        # 标准路径: models/{model_name}.onnx
         project_model_path = project_root / "models" / f"{model_name}.onnx"
         
         home = Path.home()
@@ -250,13 +513,28 @@ class BackgroundRemover:
                 f"存放位置: {expected_path}"
             )
         
-        # 加载模型
-        session = U2NetLocalSession(
-            str(model_path),
-            model_name=model_name,
-            force_cpu=force_cpu,
-            progress_callback=self._report_progress
-        )
+        # 加载模型 - 根据模型类型选择不同的Session
+        if model_name == "birefnet-toonout":
+            session = BiRefNetTorchSession(
+                str(model_path),
+                model_name=model_name,
+                force_cpu=force_cpu,
+                progress_callback=self._report_progress
+            )
+        elif model_name.startswith("birefnet"):
+            session = BiRefNetSession(
+                str(model_path),
+                model_name=model_name,
+                force_cpu=force_cpu,
+                progress_callback=self._report_progress
+            )
+        else:
+            session = U2NetLocalSession(
+                str(model_path),
+                model_name=model_name,
+                force_cpu=force_cpu,
+                progress_callback=self._report_progress
+            )
         
         # 缓存
         BackgroundRemover._model_cache[cache_key] = session
